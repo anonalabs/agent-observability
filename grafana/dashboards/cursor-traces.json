@@ -1,0 +1,70 @@
+{
+  "title": "Cursor Traces",
+  "uid": "cursor-traces",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "table",
+      "title": "Span volume by name",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT SpanName, count() AS spans, round(avg(Duration)/1e6, 1) AS avg_duration_ms FROM otel.otel_traces GROUP BY SpanName ORDER BY spans DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Tool usage by name",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT SpanAttributes['gen_ai.tool.name'] AS tool, count() AS calls, round(avg(Duration)/1e6, 1) AS avg_duration_ms FROM otel.otel_traces WHERE SpanAttributes['gen_ai.tool.name'] != '' GROUP BY tool ORDER BY calls DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Span errors",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT SpanName, StatusMessage, count() AS occurrences FROM otel.otel_traces WHERE StatusCode = 'STATUS_CODE_ERROR' GROUP BY SpanName, StatusMessage ORDER BY occurrences DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Sessions",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT uniqExact(SpanAttributes['langsmith.trace.session_id']) AS sessions FROM otel.otel_traces",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Total spans",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT count() AS total_spans FROM otel.otel_traces",
+          "format": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+cli/.venv/
+cli/**/__pycache__/
+*.pyc
+export.json
+.DS_Store

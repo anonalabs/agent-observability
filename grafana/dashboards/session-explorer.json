@@ -1,0 +1,22 @@
+{
+  "title": "Session & Tool Explorer",
+  "uid": "session-explorer",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "table",
+      "title": "Recent agent events (prompts, tool calls, API requests)",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT Timestamp, ServiceName, Body, LogAttributes FROM otel.otel_logs ORDER BY Timestamp DESC LIMIT 200",
+          "format": 1
+        }
+      ]
+    }
+  ]
+}

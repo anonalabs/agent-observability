@@ -1,0 +1,124 @@
+{
+  "title": "Token & Cost Usage",
+  "uid": "token-cost-usage",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Token usage by type",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (type) (rate(claude_code_token_usage_tokens_total[5m]))",
+          "legendFormat": "{{type}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Token usage by model",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (model) (rate(claude_code_token_usage_tokens_total[5m]))",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cost by model (USD/hr)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (model) (increase(claude_code_cost_usage_USD_total[1h]))",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cost by session (USD/hr)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (session_id) (increase(claude_code_cost_usage_USD_total[1h]))",
+          "legendFormat": "{{session_id}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Total cost (USD)",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(claude_code_cost_usage_USD_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Sessions",
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(claude_code_session_count_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Commits",
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(claude_code_commit_count_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Pull requests",
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(claude_code_pull_request_count_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Active time (hrs)",
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(claude_code_active_time_seconds_total) / 3600" }]
+    },
+    {
+      "type": "stat",
+      "title": "Lines of code (net)",
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(claude_code_lines_of_code_count_total)" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Lines of code added/removed",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (type) (rate(claude_code_lines_of_code_count_total[5m]))",
+          "legendFormat": "{{type}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Code edit tool decisions (accept vs reject)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (tool, decision) (rate(claude_code_code_edit_tool_decision_total[5m]))",
+          "legendFormat": "{{tool}} / {{decision}}"
+        }
+      ]
+    }
+  ]
+}

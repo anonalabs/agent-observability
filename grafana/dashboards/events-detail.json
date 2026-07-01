@@ -1,0 +1,94 @@
+{
+  "title": "Events Detail (Tool & API)",
+  "uid": "events-detail",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "table",
+      "title": "Tool result success/failure by tool",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT LogAttributes['name'] AS tool, countIf(LogAttributes['success']='true') AS succeeded, countIf(LogAttributes['success']='false') AS failed, round(avg(toFloat64OrZero(LogAttributes['duration_ms'])), 1) AS avg_duration_ms FROM otel.otel_logs WHERE LogAttributes['event.name']='tool_result' GROUP BY tool ORDER BY succeeded + failed DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Tool permission decisions (accept/reject) by source",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT LogAttributes['tool_name'] AS tool, LogAttributes['decision'] AS decision, LogAttributes['source'] AS source, count() AS count FROM otel.otel_logs WHERE LogAttributes['event.name']='tool_decision' GROUP BY tool, decision, source ORDER BY count DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "API requests by model",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT LogAttributes['model'] AS model, count() AS requests, sum(toInt64OrZero(LogAttributes['input_tokens'])) AS input_tokens, sum(toInt64OrZero(LogAttributes['output_tokens'])) AS output_tokens, sum(toInt64OrZero(LogAttributes['cache_read_tokens'])) AS cache_read_tokens, round(avg(toFloat64OrZero(LogAttributes['duration_ms'])), 1) AS avg_duration_ms FROM otel.otel_logs WHERE LogAttributes['event.name']='api_request' GROUP BY model ORDER BY requests DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "API errors by status code",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT LogAttributes['status_code'] AS status_code, LogAttributes['error'] AS error, count() AS occurrences FROM otel.otel_logs WHERE LogAttributes['event.name']='api_error' GROUP BY status_code, error ORDER BY occurrences DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "User prompts (total)",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 16 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT count() AS prompts FROM otel.otel_logs WHERE LogAttributes['event.name']='user_prompt'",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Avg prompt length",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 16 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT round(avg(toFloat64OrZero(LogAttributes['prompt_length'])), 0) AS avg_prompt_length FROM otel.otel_logs WHERE LogAttributes['event.name']='user_prompt'",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Event volume by type",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT LogAttributes['event.name'] AS event, count() AS occurrences FROM otel.otel_logs GROUP BY event ORDER BY occurrences DESC",
+          "format": 1
+        }
+      ]
+    }
+  ]
+}
