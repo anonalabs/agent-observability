@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
+import questionary
 import typer
 from rich.console import Console
 
@@ -15,6 +18,14 @@ from ..config import load_yaml_config, resolve
 console = Console()
 
 DEFAULT_ENDPOINT = "http://localhost:4317"
+
+
+def _ask(result):
+    """questionary returns None on Ctrl-C/Esc -- treat that as a clean abort."""
+    if result is None:
+        console.print("[yellow]Cancelled.[/yellow]")
+        raise typer.Exit(1)
+    return result
 
 
 def _shell_rc_path() -> Path:
@@ -59,7 +70,7 @@ def connect(
         "connect.endpoint",
         endpoint,
         yaml_config,
-        prompt=lambda: typer.prompt("Collector OTLP endpoint", default=DEFAULT_ENDPOINT),
+        prompt=lambda: _ask(questionary.text("Collector OTLP endpoint:", default=DEFAULT_ENDPOINT).ask()),
         non_interactive=non_interactive,
         default=DEFAULT_ENDPOINT,
     )
@@ -76,9 +87,9 @@ def connect(
         "connect.log_user_prompts",
         log_user_prompts,
         yaml_config,
-        prompt=lambda: typer.confirm(
+        prompt=lambda: _ask(questionary.confirm(
             "Capture full user prompt text? (privacy-sensitive)", default=False
-        ),
+        ).ask()),
         non_interactive=non_interactive,
         default=False,
     )
@@ -86,9 +97,9 @@ def connect(
         "connect.log_tool_details",
         log_tool_details,
         yaml_config,
-        prompt=lambda: typer.confirm(
+        prompt=lambda: _ask(questionary.confirm(
             "Capture tool details (bash commands, file paths)? (privacy-sensitive)", default=False
-        ),
+        ).ask()),
         non_interactive=non_interactive,
         default=False,
     )
@@ -104,9 +115,9 @@ def connect(
         "connect.write_shell_rc",
         write_shell_rc,
         yaml_config,
-        prompt=lambda: typer.confirm(
+        prompt=lambda: _ask(questionary.confirm(
             f"Append these to {_shell_rc_path()}?", default=False
-        ),
+        ).ask()),
         non_interactive=non_interactive,
         default=False,
     )
@@ -127,18 +138,30 @@ def _connect_cursor(endpoint: str, yaml_config: dict, *, non_interactive: bool) 
     agent = AGENTS["cursor"]
 
     if shutil.which("cursor-otel-hook") is None:
-        console.print(
-            "[yellow]`cursor-otel-hook` isn't on PATH. Install it first:\n"
-            "  pip install ./integrations/cursor-otel-hook[/yellow]"
-        )
-        if not non_interactive and not typer.confirm("Continue writing config anyway?", default=True):
-            raise typer.Exit(1)
+        package_path = agent.vendored_package_path()
+        should_install = non_interactive or _ask(questionary.confirm(
+            f"`cursor-otel-hook` isn't installed. Install it now from {package_path}?", default=True
+        ).ask())
+        if should_install:
+            result = subprocess.run([sys.executable, "-m", "pip", "install", str(package_path)])
+            if result.returncode != 0:
+                console.print("[red]Install failed -- see pip output above.[/red]")
+                raise typer.Exit(1)
+            if shutil.which("cursor-otel-hook") is None:
+                console.print(
+                    "[yellow]Installed, but `cursor-otel-hook` still isn't on PATH "
+                    "(check your Python scripts dir is on PATH).[/yellow]"
+                )
+        else:
+            console.print("[yellow]Skipping install -- hooks won't work until it's installed.[/yellow]")
 
     mask_prompts = resolve(
         "connect.mask_prompts",
         None,
         yaml_config,
-        prompt=lambda: typer.confirm("Mask prompts/file paths/emails? (privacy)", default=False),
+        prompt=lambda: _ask(questionary.confirm(
+            "Mask prompts/file paths/emails? (privacy)", default=False
+        ).ask()),
         non_interactive=non_interactive,
         default=False,
     )
@@ -173,7 +196,9 @@ def _connect_gemini_cli(endpoint: str, yaml_config: dict, *, non_interactive: bo
         "connect.log_prompts",
         None,
         yaml_config,
-        prompt=lambda: typer.confirm("Log full prompt text? (privacy-sensitive)", default=False),
+        prompt=lambda: _ask(questionary.confirm(
+            "Log full prompt text? (privacy-sensitive)", default=False
+        ).ask()),
         non_interactive=non_interactive,
         default=False,
     )
@@ -200,9 +225,9 @@ def _backup_if_exists(path: Path) -> None:
 
 def _prompt_agent() -> str:
     detected = detect_agents()
+    default = detected[0].name if detected else "claude-code"
     if detected:
-        default = detected[0].name
         console.print(f"Detected agent: {default}")
-        return typer.prompt("Agent to configure", default=default)
-    console.print(f"No agent auto-detected. Supported: {', '.join(AGENTS)}")
-    return typer.prompt("Agent to configure", default="claude-code")
+    return _ask(questionary.select(
+        "Agent to configure:", choices=list(AGENTS), default=default
+    ).ask())

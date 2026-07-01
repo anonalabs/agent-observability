@@ -46,6 +46,10 @@ class CursorAgent:
     def hooks_json_path(self) -> Path:
         return Path.home() / ".cursor" / "hooks.json"
 
+    def vendored_package_path(self) -> Path:
+        # cli/src/agentobs/agents/cursor.py -> repo root is 4 parents up.
+        return Path(__file__).resolve().parents[4] / "integrations" / "cursor-otel-hook"
+
     def otel_config(self, endpoint: str, mask_prompts: bool = False) -> dict:
         return {
             "OTEL_EXPORTER_OTLP_ENDPOINT": endpoint,
