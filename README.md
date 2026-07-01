@@ -5,10 +5,12 @@ Open-source telemetry platform for AI coding agents — token/cost usage, tool u
 ## Quickstart
 
 ```bash
-pip install -e ./cli
-agentobs install    # brings up the collector/prometheus/clickhouse/grafana stack
-agentobs connect    # wires up your agent's telemetry (interactive, or --agent/--endpoint flags)
+cd cli && go build -o agentobs ./cmd/agentobs && cd ..
+./cli/agentobs install    # brings up the collector/prometheus/clickhouse/grafana stack
+./cli/agentobs connect    # wires up your agent's telemetry (interactive, or --agent/--endpoint flags)
 ```
+
+(Or `go install ./cli/cmd/agentobs` to put `agentobs` on your `PATH`.)
 
 Then open Grafana at http://localhost:3000. See [cli/README.md](cli/README.md) for all `agentobs` commands, or [docs/setup.md](docs/setup.md) for the manual (non-CLI) path.
 

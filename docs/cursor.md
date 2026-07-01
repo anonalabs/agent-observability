@@ -1,6 +1,8 @@
 # Cursor
 
-Cursor has no native OTel export. `agentobs` bundles its own hook shim (`agentobs.cursor_hook`) that Cursor's hooks system shells out to on every agent event, converting each into an OTel span sent to the collector. No separate package or install step -- it ships with `agentobs` itself, exposed as the `agentobs-cursor-hook` console script.
+Cursor has no native OTel export. `agentobs` bundles its own hook shim (`internal/cursorhook`, a from-scratch Go reimplementation) that Cursor's hooks system shells out to on every agent event, converting each into an OTel span sent to the collector. No separate binary or install step -- it's the same `agentobs` binary, invoked as `agentobs cursor-hook` (a hidden subcommand; Cursor's wrapper script calls it directly, you shouldn't need to run it by hand).
+
+Every span is linked to its parent across process invocations (each hook event runs in a fresh process) via a small file-based context store in the system temp dir, so a full session shows up as one correlated trace in Grafana rather than disconnected single spans -- this holds for both `grpc` and `http/protobuf` protocols.
 
 ## Setup
 

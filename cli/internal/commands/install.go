@@ -1,0 +1,92 @@
+package commands
+
+import (
+	"fmt"
+	"net"
+	"time"
+
+	"github.com/AlecAivazis/survey/v2"
+	"github.com/spf13/cobra"
+
+	"github.com/anonalabs/agent-observability/cli/internal/compose"
+)
+
+var requiredPorts = map[int]string{
+	4317: "OTLP gRPC",
+	4318: "OTLP HTTP",
+	8889: "Prometheus exporter",
+	9090: "Prometheus UI",
+	8123: "ClickHouse HTTP",
+	9000: "ClickHouse native",
+	3000: "Grafana",
+}
+
+func portInUse(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+func InstallCmd() *cobra.Command {
+	var composeFile string
+	var detach bool
+	var nonInteractive bool
+
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Bring up the collector/prometheus/clickhouse/grafana stack",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !compose.DockerAvailable() {
+				return fmt.Errorf("docker isn't available (checked `docker info`); install/start Docker and retry")
+			}
+
+			var busy []string
+			for port, desc := range requiredPorts {
+				if portInUse(port) {
+					busy = append(busy, fmt.Sprintf("%d (%s)", port, desc))
+				}
+			}
+			if len(busy) > 0 {
+				fmt.Printf("Ports already in use: %v\n", busy)
+				if !nonInteractive {
+					proceed := false
+					if err := survey.AskOne(&survey.Confirm{
+						Message: "Continue anyway?",
+						Default: false,
+					}, &proceed); err != nil {
+						return err
+					}
+					if !proceed {
+						return fmt.Errorf("aborted")
+					}
+				}
+			}
+
+			resolved, err := compose.ResolveComposeFile(composeFile)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Starting stack via %s ...\n", resolved)
+			if err := compose.Up(resolved, detach); err != nil {
+				return err
+			}
+
+			fmt.Println("Stack is up.")
+			fmt.Println("Grafana:    http://localhost:3000")
+			fmt.Println("Prometheus: http://localhost:9090")
+			fmt.Println()
+			fmt.Println("Next: run `agentobs connect` to wire up an agent's telemetry.")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&composeFile, "compose-file", "", "")
+	cmd.Flags().BoolVar(&detach, "detach", true, "")
+	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "")
+	cmd.Flags().BoolVar(&nonInteractive, "yes", false, "")
+
+	return cmd
+}
