@@ -383,7 +383,7 @@ class GenerationBatchingProcessor(SpanProcessor):
                 {
                     "resource": {"attributes": resource_attributes},
                     "scopeSpans": [
-                        {"scope": {"name": "cursor_otel_hook"}, "spans": spans}
+                        {"scope": {"name": "agentobs-cursor-hook"}, "spans": spans}
                     ],
                 }
             ]

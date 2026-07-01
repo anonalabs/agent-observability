@@ -131,7 +131,7 @@ class OTLPJSONSpanExporter(SpanExporter):
             {
                 "resource": {"attributes": resource_attributes},
                 "scopeSpans": [
-                    {"scope": {"name": "cursor_otel_hook"}, "spans": scope_spans}
+                    {"scope": {"name": "agentobs-cursor-hook"}, "spans": scope_spans}
                 ],
             }
         )

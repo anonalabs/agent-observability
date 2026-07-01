@@ -26,7 +26,7 @@ from typing import Sequence
 
 from .config import OTELConfig
 from .privacy import mask_sensitive_data
-from .context_manager import generate_session_trace_id
+from .context import generate_session_trace_id
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -157,9 +157,9 @@ class CursorHookProcessor:
         # Choose exporter based on protocol
         if self.config.protocol == "http/json":
             # Use custom JSON HTTP exporter
-            from .json_exporter import OTLPJSONSpanExporter
-            from .batching_processor import GenerationBatchingProcessor
-            from .context_manager import GenerationContextManager
+            from .exporter import OTLPJSONSpanExporter
+            from .batching import GenerationBatchingProcessor
+            from .context import GenerationContextManager
 
             # Ensure endpoint has /v1/traces path for OTLP HTTP spec
             endpoint = self.config.endpoint
@@ -824,7 +824,7 @@ Examples:
     parser.add_argument(
         "--log-file",
         "-l",
-        help="Path to log file (default: cursor_otel_hook.log in project dir)",
+        help="Path to log file (default: agentobs-cursor-hook.log in project dir)",
         default=None,
     )
 
@@ -840,7 +840,7 @@ Examples:
         # Default to ~/.cursor/hooks/ directory
         cursor_hooks_dir = Path.home() / ".cursor" / "hooks"
         cursor_hooks_dir.mkdir(parents=True, exist_ok=True)
-        log_file = cursor_hooks_dir / "cursor_otel_hook.log"
+        log_file = cursor_hooks_dir / "agentobs-cursor-hook.log"
     else:
         log_file = Path(log_file)
 

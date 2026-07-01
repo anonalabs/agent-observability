@@ -1,6 +1,7 @@
-"""Cursor has no native OTel export -- it needs the cursor-otel-hook shim
-(vendored at integrations/cursor-otel-hook) wired into ~/.cursor/hooks.json.
-Unlike Claude Code, this agent is configured via files, not shell env vars.
+"""Cursor has no native OTel export -- agentobs bundles its own hook shim
+(agentobs.cursor_hook) wired into ~/.cursor/hooks.json via the
+agentobs-cursor-hook console script. Unlike Claude Code, this agent is
+configured via files, not shell env vars.
 """
 
 from __future__ import annotations
@@ -46,10 +47,6 @@ class CursorAgent:
     def hooks_json_path(self) -> Path:
         return Path.home() / ".cursor" / "hooks.json"
 
-    def vendored_package_path(self) -> Path:
-        # cli/src/agentobs/agents/cursor.py -> repo root is 4 parents up.
-        return Path(__file__).resolve().parents[4] / "integrations" / "cursor-otel-hook"
-
     def otel_config(self, endpoint: str, mask_prompts: bool = False) -> dict:
         return {
             "OTEL_EXPORTER_OTLP_ENDPOINT": endpoint,
@@ -82,5 +79,5 @@ class CursorAgent:
     def wrapper_script(self) -> str:
         return (
             "#!/bin/bash\n"
-            f'exec cursor-otel-hook --config "{self.config_path()}" "$@"\n'
+            f'exec agentobs-cursor-hook --config "{self.config_path()}" "$@"\n'
         )

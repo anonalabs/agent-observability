@@ -37,7 +37,7 @@ def generate_session_trace_id(conversation_id: str) -> int:
     return trace_id
 
 
-# Platform-specific file locking (same as batching_processor)
+# Platform-specific file locking (same approach as batching.py)
 if sys.platform == "win32":
     import msvcrt
 

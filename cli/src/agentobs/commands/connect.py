@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -137,23 +135,11 @@ def connect(
 def _connect_cursor(endpoint: str, yaml_config: dict, *, non_interactive: bool) -> None:
     agent = AGENTS["cursor"]
 
-    if shutil.which("cursor-otel-hook") is None:
-        package_path = agent.vendored_package_path()
-        should_install = non_interactive or _ask(questionary.confirm(
-            f"`cursor-otel-hook` isn't installed. Install it now from {package_path}?", default=True
-        ).ask())
-        if should_install:
-            result = subprocess.run([sys.executable, "-m", "pip", "install", str(package_path)])
-            if result.returncode != 0:
-                console.print("[red]Install failed -- see pip output above.[/red]")
-                raise typer.Exit(1)
-            if shutil.which("cursor-otel-hook") is None:
-                console.print(
-                    "[yellow]Installed, but `cursor-otel-hook` still isn't on PATH "
-                    "(check your Python scripts dir is on PATH).[/yellow]"
-                )
-        else:
-            console.print("[yellow]Skipping install -- hooks won't work until it's installed.[/yellow]")
+    if shutil.which("agentobs-cursor-hook") is None:
+        console.print(
+            "[yellow]`agentobs-cursor-hook` isn't on PATH -- is agentobs installed "
+            "in this environment (`pip install -e ./cli`)?[/yellow]"
+        )
 
     mask_prompts = resolve(
         "connect.mask_prompts",

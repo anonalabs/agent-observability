@@ -1,11 +1,10 @@
 # Cursor
 
-Cursor has no native OTel export. This stack uses [`cursor-otel-hook`](../integrations/cursor-otel-hook) (vendored from the upstream reference project, MIT licensed) -- a Python shim that Cursor's hooks system shells out to on every agent event, converting each into an OTel span sent to the collector.
+Cursor has no native OTel export. `agentobs` bundles its own hook shim (`agentobs.cursor_hook`) that Cursor's hooks system shells out to on every agent event, converting each into an OTel span sent to the collector. No separate package or install step -- it ships with `agentobs` itself, exposed as the `agentobs-cursor-hook` console script.
 
 ## Setup
 
 ```bash
-pip install ./integrations/cursor-otel-hook
 agentobs connect --agent cursor
 ```
 
@@ -28,7 +27,7 @@ Unlike Claude Code and Gemini CLI, Cursor's data lands in **traces** (`otel_trac
 | `stop` | agent run completion |
 | `subagentStart` / `subagentStop` | subagent activity |
 
-Key span attributes (GenAI + LangSmith conventions): `gen_ai.tool.name`, `gen_ai.request.model`, `langsmith.trace.session_id`, `langsmith.metadata.duration_ms`, `langsmith.metadata.shell_command`, `langsmith.metadata.file_path`. Full reference in the vendored [README](../integrations/cursor-otel-hook/README.md).
+Key span attributes (GenAI + LangSmith conventions): `gen_ai.tool.name`, `gen_ai.request.model`, `langsmith.trace.session_id`, `langsmith.metadata.duration_ms`, `langsmith.metadata.shell_command`, `langsmith.metadata.file_path`.
 
 ## Privacy
 
