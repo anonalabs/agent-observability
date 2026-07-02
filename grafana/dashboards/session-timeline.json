@@ -1,0 +1,43 @@
+{
+  "title": "🔍 Session Timeline (unified)",
+  "uid": "session-timeline",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "session_id",
+        "type": "query",
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+        "query": "SELECT DISTINCT session_id FROM (SELECT LogAttributes['session.id'] AS session_id FROM otel.otel_logs WHERE session_id != '' UNION ALL SELECT SpanAttributes['langsmith.trace.session_id'] AS session_id FROM otel.otel_traces WHERE session_id != '') ORDER BY session_id",
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "Pick a `session_id` above (from either Claude Code, Gemini CLI, or Cursor -- also visible in the Leaderboard's \"Sessions by agent\" table) to see its full timeline, merged from whichever agent produced it. One session only ever comes from one agent, but this dashboard doesn't care which -- same query, same view, regardless of source."
+      }
+    },
+    {
+      "type": "table",
+      "title": "Timeline for $session_id",
+      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 3 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT Timestamp, ServiceName AS agent, LogAttributes['event.name'] AS event, concat(LogAttributes['model'], LogAttributes['name'], LogAttributes['tool_name']) AS detail FROM otel.otel_logs WHERE LogAttributes['session.id'] = '$session_id' UNION ALL SELECT Timestamp, ServiceName AS agent, SpanName AS event, SpanAttributes['gen_ai.tool.name'] AS detail FROM otel.otel_traces WHERE SpanAttributes['langsmith.trace.session_id'] = '$session_id' ORDER BY Timestamp",
+          "format": 1
+        }
+      ]
+    }
+  ]
+}

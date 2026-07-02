@@ -1,0 +1,53 @@
+# Built-in agent specs. Claude Code and Gemini CLI are expressed declaratively
+# here to prove the generic adapter works -- add another OTel-emitting tool by
+# adding an entry here (or in a user agents.yaml), no Go code required.
+agents:
+  - name: claude-code
+    kind: env
+    detect:
+      binary: claude
+      path: ~/.claude
+    vars:
+      - key: CLAUDE_CODE_ENABLE_TELEMETRY
+        value: "1"
+      - key: OTEL_METRICS_EXPORTER
+        value: "otlp"
+      - key: OTEL_LOGS_EXPORTER
+        value: "otlp"
+      - key: OTEL_EXPORTER_OTLP_PROTOCOL
+        value: "grpc"
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
+        value: "{{.Endpoint}}"
+      - key: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+        value: "cumulative"
+      - key: OTEL_LOG_USER_PROMPTS
+        value: "1"
+        when: log_user_prompts
+      - key: OTEL_LOG_TOOL_DETAILS
+        value: "1"
+        when: log_tool_details
+    prompts:
+      - name: log_user_prompts
+        message: "Capture full user prompt text? (privacy-sensitive)"
+        default: false
+      - name: log_tool_details
+        message: "Capture tool details (bash commands, file paths)? (privacy-sensitive)"
+        default: false
+
+  - name: gemini-cli
+    kind: json-merge
+    detect:
+      binary: gemini
+      path: ~/.gemini
+    target: ~/.gemini/settings.json
+    set:
+      - path: telemetry.enabled
+        value: true
+      - path: telemetry.target
+        value: "local"
+      - path: telemetry.logPrompts
+        value: "{{.log_prompts}}"
+    prompts:
+      - name: log_prompts
+        message: "Log full prompt text? (privacy-sensitive)"
+        default: false

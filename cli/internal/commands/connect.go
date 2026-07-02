@@ -17,19 +17,33 @@ import (
 
 const defaultEndpoint = "http://localhost:4317"
 
-var agentNames = []string{"claude-code", "cursor", "gemini-cli"}
-
-func detectAgent() string {
-	all := []interface {
-		Name() string
-		Detect() bool
-	}{
-		agents.ClaudeCodeAgent{}, agents.CursorAgent{}, agents.GeminiCliAgent{},
+func defaultAgentsFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
 	}
-	for _, a := range all {
-		if a.Detect() {
-			return a.Name()
+	return filepath.Join(home, ".config", "agentobs", "agents.yaml")
+}
+
+func loadRegistry(agentsFile string) (*agents.Registry, error) {
+	if agentsFile == "" {
+		agentsFile = defaultAgentsFile()
+	}
+	return agents.LoadRegistry(agentsFile)
+}
+
+func agentNames(reg *agents.Registry) []string {
+	return append(reg.Names(), "cursor")
+}
+
+func detectAgent(reg *agents.Registry) string {
+	for _, spec := range reg.All() {
+		if spec.Detect.Detect() {
+			return spec.Name
 		}
+	}
+	if (agents.CursorAgent{}).Detect() {
+		return "cursor"
 	}
 	return ""
 }
@@ -55,14 +69,19 @@ func backupIfExists(path string) error {
 }
 
 func ConnectCmd() *cobra.Command {
-	var agentFlag, endpointFlag, configFlag string
+	var agentFlag, endpointFlag, configFlag, agentsFileFlag string
 	var writeShellRcFlag, logUserPromptsFlag, logToolDetailsFlag *bool
 	var nonInteractive bool
 
 	cmd := &cobra.Command{
 		Use:   "connect",
-		Short: "Wire up an agent's telemetry env vars to point at the collector",
+		Short: "Wire up an agent's telemetry to point at the collector",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			reg, err := loadRegistry(agentsFileFlag)
+			if err != nil {
+				return err
+			}
+
 			yamlConfig, err := config.LoadYAML(configFlag)
 			if err != nil {
 				return err
@@ -72,12 +91,15 @@ func ConnectCmd() *cobra.Command {
 			if cmd.Flags().Changed("agent") {
 				agentFlagPtr = &agentFlag
 			}
-			agentName, err := config.Resolve("connect.agent", agentFlagPtr, yamlConfig, promptAgent, nonInteractive, nil)
+			agentName, err := config.Resolve("connect.agent", agentFlagPtr, yamlConfig, func() (string, error) {
+				return promptAgent(reg)
+			}, nonInteractive, nil)
 			if err != nil {
 				return err
 			}
-			if !contains(agentNames, agentName) {
-				return fmt.Errorf("unknown agent '%s'. Supported: %s", agentName, strings.Join(agentNames, ", "))
+			names := agentNames(reg)
+			if !contains(names, agentName) {
+				return fmt.Errorf("unknown agent '%s'. Supported: %s", agentName, strings.Join(names, ", "))
 			}
 
 			var endpointFlagPtr *string
@@ -94,17 +116,25 @@ func ConnectCmd() *cobra.Command {
 				return err
 			}
 
-			switch agentName {
-			case "cursor":
+			if agentName == "cursor" {
 				return connectCursor(endpoint, yamlConfig, nonInteractive)
-			case "gemini-cli":
-				return connectGeminiCli(endpoint, yamlConfig, nonInteractive)
+			}
+
+			spec, ok := reg.Get(agentName)
+			if !ok {
+				return fmt.Errorf("agent '%s' not found in registry", agentName)
+			}
+
+			flagAnswers := map[string]*bool{
+				"log_user_prompts": flagOrNil(cmd, "log-user-prompts", logUserPromptsFlag),
+				"log_tool_details": flagOrNil(cmd, "log-tool-details", logToolDetailsFlag),
+			}
+
+			switch spec.Kind {
+			case "json-merge":
+				return connectJSONMerge(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers)
 			default:
-				return connectClaudeCode(endpoint, yamlConfig, nonInteractive,
-					flagOrNil(cmd, "log-user-prompts", logUserPromptsFlag),
-					flagOrNil(cmd, "log-tool-details", logToolDetailsFlag),
-					flagOrNil(cmd, "write-shell-rc", writeShellRcFlag),
-				)
+				return connectEnv(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers, flagOrNil(cmd, "write-shell-rc", writeShellRcFlag))
 			}
 		},
 	}
@@ -112,9 +142,10 @@ func ConnectCmd() *cobra.Command {
 	cmd.Flags().StringVar(&agentFlag, "agent", "", "e.g. claude-code")
 	cmd.Flags().StringVar(&endpointFlag, "endpoint", "", "")
 	cmd.Flags().StringVar(&configFlag, "config", "", "agentobs.yaml path")
+	cmd.Flags().StringVar(&agentsFileFlag, "agents-file", "", "extra agent specs (default: ~/.config/agentobs/agents.yaml)")
 	writeShellRcFlag = cmd.Flags().Bool("write-shell-rc", false, "")
-	logUserPromptsFlag = cmd.Flags().Bool("log-user-prompts", false, "capture full prompt text (privacy-sensitive)")
-	logToolDetailsFlag = cmd.Flags().Bool("log-tool-details", false, "capture bash commands and file paths (privacy-sensitive)")
+	logUserPromptsFlag = cmd.Flags().Bool("log-user-prompts", false, "capture full prompt text (privacy-sensitive, claude-code only)")
+	logToolDetailsFlag = cmd.Flags().Bool("log-tool-details", false, "capture bash commands and file paths (privacy-sensitive, claude-code only)")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "")
 	cmd.Flags().BoolVar(&nonInteractive, "yes", false, "")
 
@@ -137,43 +168,42 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-func promptAgent() (string, error) {
-	detected := detectAgent()
+func promptAgent(reg *agents.Registry) (string, error) {
+	names := agentNames(reg)
+	detected := detectAgent(reg)
 	if detected != "" {
 		fmt.Printf("Detected agent: %s\n", detected)
 	} else {
-		detected = "claude-code"
+		detected = names[0]
 	}
 	var v string
 	err := survey.AskOne(&survey.Select{
 		Message: "Agent to configure:",
-		Options: agentNames,
+		Options: names,
 		Default: detected,
 	}, &v)
 	return v, err
 }
 
-func connectClaudeCode(endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, logUserPromptsFlag, logToolDetailsFlag, writeShellRcFlag *bool) error {
-	logUserPrompts, err := config.Resolve("connect.log_user_prompts", logUserPromptsFlag, yamlConfig, func() (bool, error) {
-		var v bool
-		err := survey.AskOne(&survey.Confirm{Message: "Capture full user prompt text? (privacy-sensitive)", Default: false}, &v)
-		return v, err
-	}, nonInteractive, boolPtr(false))
-	if err != nil {
-		return err
+// connectEnv handles any "env"-kind spec (Claude Code, and any future
+// env-based agent added via agents.yaml): resolve its prompts, build the
+// ordered env vars, then either write them to the shell rc or print them.
+func connectEnv(spec agents.AgentSpec, endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, flagAnswers map[string]*bool, writeShellRcFlag *bool) error {
+	answers := map[string]bool{}
+	for _, p := range spec.Prompts {
+		def := p.Default
+		v, err := config.Resolve("connect."+p.Name, flagAnswers[p.Name], yamlConfig, func() (bool, error) {
+			var vv bool
+			err := survey.AskOne(&survey.Confirm{Message: p.Message, Default: p.Default}, &vv)
+			return vv, err
+		}, nonInteractive, &def)
+		if err != nil {
+			return err
+		}
+		answers[p.Name] = v
 	}
 
-	logToolDetails, err := config.Resolve("connect.log_tool_details", logToolDetailsFlag, yamlConfig, func() (bool, error) {
-		var v bool
-		err := survey.AskOne(&survey.Confirm{Message: "Capture tool details (bash commands, file paths)? (privacy-sensitive)", Default: false}, &v)
-		return v, err
-	}, nonInteractive, boolPtr(false))
-	if err != nil {
-		return err
-	}
-
-	agent := agents.ClaudeCodeAgent{}
-	envVars := agent.EnvVars(endpoint, logUserPrompts, logToolDetails)
+	envVars := spec.ResolveEnvVars(endpoint, answers)
 	var exportLines []string
 	for _, ev := range envVars {
 		exportLines = append(exportLines, fmt.Sprintf("export %s=\"%s\"", ev.Key, ev.Value))
@@ -206,8 +236,68 @@ func connectClaudeCode(endpoint string, yamlConfig map[string]interface{}, nonIn
 			fmt.Println(line)
 		}
 	}
-	printNextSteps("Use `claude` as normal", "Token & Cost Usage")
+	printNextSteps(fmt.Sprintf("Use %s as normal", spec.Name), "Token & Cost Usage")
 	return nil
+}
+
+// connectJSONMerge handles any "json-merge"-kind spec (Gemini CLI, and any
+// future settings.json-style agent): resolve its prompts, merge the spec's
+// keys into whatever's already at the target path, backing up first.
+func connectJSONMerge(spec agents.AgentSpec, endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, flagAnswers map[string]*bool) error {
+	answers := map[string]bool{}
+	for _, p := range spec.Prompts {
+		def := p.Default
+		v, err := config.Resolve("connect."+p.Name, flagAnswers[p.Name], yamlConfig, func() (bool, error) {
+			var vv bool
+			err := survey.AskOne(&survey.Confirm{Message: p.Message, Default: p.Default}, &vv)
+			return vv, err
+		}, nonInteractive, &def)
+		if err != nil {
+			return err
+		}
+		answers[p.Name] = v
+	}
+
+	targetPath := agents.ExpandHome(spec.Target)
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+
+	var existing map[string]interface{}
+	if data, err := os.ReadFile(targetPath); err == nil {
+		if err := backupIfExists(targetPath); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(data, &existing); err != nil {
+			return fmt.Errorf("parsing existing %s: %w", targetPath, err)
+		}
+	}
+
+	merged := spec.ResolveJSONMerge(existing, endpoint, answers)
+	out, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(targetPath, out, 0o644); err != nil {
+		return err
+	}
+
+	fmt.Printf("Wrote %s (merged, not replaced).\n", targetPath)
+	if !specSetsEndpoint(spec) {
+		fmt.Printf("Also export: export OTEL_EXPORTER_OTLP_ENDPOINT=\"%s\"\n", endpoint)
+		fmt.Println("(only needed if the collector isn't at this agent's default endpoint)")
+	}
+	printNextSteps(fmt.Sprintf("Use %s as normal", spec.Name), "Token & Cost Usage")
+	return nil
+}
+
+func specSetsEndpoint(spec agents.AgentSpec) bool {
+	for _, s := range spec.Set {
+		if str, ok := s.Value.(string); ok && str == "{{.Endpoint}}" {
+			return true
+		}
+	}
+	return false
 }
 
 // printNextSteps is shown at the end of every connect path so it's always
@@ -216,51 +306,6 @@ func printNextSteps(activateHint, dashboard string) {
 	fmt.Println()
 	fmt.Printf("Next: %s, then open Grafana at http://localhost:3000 -> \"%s\" dashboard.\n", activateHint, dashboard)
 	fmt.Println("(Data won't appear until you've actually used the agent for a bit -- give it 30-60s after your first prompt/tool call.)")
-}
-
-func connectGeminiCli(endpoint string, yamlConfig map[string]interface{}, nonInteractive bool) error {
-	logPrompts, err := config.Resolve("connect.log_prompts", (*bool)(nil), yamlConfig, func() (bool, error) {
-		var v bool
-		err := survey.AskOne(&survey.Confirm{Message: "Log full prompt text? (privacy-sensitive)", Default: false}, &v)
-		return v, err
-	}, nonInteractive, boolPtr(false))
-	if err != nil {
-		return err
-	}
-
-	agent := agents.GeminiCliAgent{}
-	settingsPath, err := agent.SettingsPath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		return err
-	}
-
-	var existing map[string]interface{}
-	if data, err := os.ReadFile(settingsPath); err == nil {
-		if err := backupIfExists(settingsPath); err != nil {
-			return err
-		}
-		if err := json.Unmarshal(data, &existing); err != nil {
-			return fmt.Errorf("parsing existing %s: %w", settingsPath, err)
-		}
-	}
-
-	merged := agent.MergeSettings(existing, logPrompts)
-	out, err := json.MarshalIndent(merged, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(settingsPath, out, 0o644); err != nil {
-		return err
-	}
-
-	fmt.Printf("Wrote %s (merged, not replaced).\n", settingsPath)
-	fmt.Printf("Also export: export OTEL_EXPORTER_OTLP_ENDPOINT=\"%s\"\n", endpoint)
-	fmt.Println("(only needed if the collector isn't at the settings.json default of localhost:4317)")
-	printNextSteps("Use `gemini` as normal", "Token & Cost Usage")
-	return nil
 }
 
 func connectCursor(endpoint string, yamlConfig map[string]interface{}, nonInteractive bool) error {
