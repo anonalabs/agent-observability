@@ -2,8 +2,8 @@
 //
 // Unlike the Python CLI (which located the compose file relative to the
 // installed package's source path), a compiled Go binary carries no such
-// path. Instead this resolves relative to the current working directory
-// (matching how `docker compose` itself is invoked) with an env var/flag
+// path. Instead this searches upward from the current working directory
+// (same convention as `git`/`docker compose` itself), with an env var/flag
 // override for anything else.
 package compose
 
@@ -17,17 +17,26 @@ import (
 var Services = []string{"otel-collector", "prometheus", "clickhouse", "grafana"}
 
 func DefaultComposeFile() (string, error) {
-	candidate := filepath.Join(".", "docker-compose.yml")
-	if _, err := os.Stat(candidate); err == nil {
-		abs, err := filepath.Abs(candidate)
-		if err != nil {
-			return "", err
-		}
-		return abs, nil
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
 	}
+
+	for {
+		candidate := filepath.Join(dir, "docker-compose.yml")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
 	return "", fmt.Errorf(
-		"could not find docker-compose.yml in the current directory; " +
-			"run agentobs from the repo root, or pass --compose-file explicitly",
+		"could not find docker-compose.yml in the current directory or any parent; " +
+			"run agentobs from within the repo, or pass --compose-file explicitly",
 	)
 }
 
