@@ -1,0 +1,144 @@
+{
+  "title": "Agent Leaderboard",
+  "uid": "agent-leaderboard",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "type": "table",
+      "title": "Activity volume by agent (events + spans, all sources unified)",
+      "description": "UNION across otel_logs (Claude Code, Gemini CLI events) and otel_traces (Cursor spans), grouped by ServiceName -- no other OTel-based tool unifies agents this way since each is normally viewed through a single-vendor lens.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT ServiceName AS agent, count() AS events FROM otel.otel_logs GROUP BY agent UNION ALL SELECT ServiceName AS agent, count() AS events FROM otel.otel_traces GROUP BY agent ORDER BY events DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Sessions by agent (unified)",
+      "description": "Unique sessions per agent, normalizing Claude Code/Gemini CLI's session.id log attribute and Cursor's langsmith.trace.session_id span attribute into one comparison.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT ServiceName AS agent, uniqExact(LogAttributes['session.id']) AS sessions FROM otel.otel_logs WHERE LogAttributes['session.id'] != '' GROUP BY agent UNION ALL SELECT ServiceName AS agent, uniqExact(SpanAttributes['langsmith.trace.session_id']) AS sessions FROM otel.otel_traces WHERE SpanAttributes['langsmith.trace.session_id'] != '' GROUP BY agent ORDER BY sessions DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Claude Code detail (cost/tokens -- not comparable to Cursor, which has no cost data)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 }
+    },
+    {
+      "type": "stat",
+      "title": "Cost (USD)",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(claude_code_cost_usage_USD_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Tokens",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(claude_code_token_usage_tokens_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Sessions",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(claude_code_session_count_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Edit accept rate",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum(claude_code_code_edit_tool_decision_total{decision=\"accept\"}) / sum(claude_code_code_edit_tool_decision_total)"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Cursor detail (tool/span volume -- no native cost or token data)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+    },
+    {
+      "type": "table",
+      "title": "Tool calls by name",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 15 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT SpanAttributes['gen_ai.tool.name'] AS tool, count() AS calls FROM otel.otel_traces WHERE SpanAttributes['gen_ai.tool.name'] != '' GROUP BY tool ORDER BY calls DESC",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Sessions",
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 15 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT uniqExact(SpanAttributes['langsmith.trace.session_id']) AS sessions FROM otel.otel_traces",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Total spans",
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 15 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT count() AS total_spans FROM otel.otel_traces",
+          "format": 1
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Gemini CLI detail (once connected -- metric names per docs/gemini-cli.md)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }
+    },
+    {
+      "type": "stat",
+      "title": "Tokens",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(gemini_cli_token_usage_tokens_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Sessions",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "sum(gemini_cli_session_count_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Tool call success rate",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum(gemini_cli_tool_call_count_total{success=\"true\"}) / sum(gemini_cli_tool_call_count_total)"
+        }
+      ]
+    }
+  ]
+}
