@@ -206,7 +206,16 @@ func connectClaudeCode(endpoint string, yamlConfig map[string]interface{}, nonIn
 			fmt.Println(line)
 		}
 	}
+	printNextSteps("Use `claude` as normal", "Token & Cost Usage")
 	return nil
+}
+
+// printNextSteps is shown at the end of every connect path so it's always
+// clear where to actually look afterward, not just that files were written.
+func printNextSteps(activateHint, dashboard string) {
+	fmt.Println()
+	fmt.Printf("Next: %s, then open Grafana at http://localhost:3000 -> \"%s\" dashboard.\n", activateHint, dashboard)
+	fmt.Println("(Data won't appear until you've actually used the agent for a bit -- give it 30-60s after your first prompt/tool call.)")
 }
 
 func connectGeminiCli(endpoint string, yamlConfig map[string]interface{}, nonInteractive bool) error {
@@ -250,6 +259,7 @@ func connectGeminiCli(endpoint string, yamlConfig map[string]interface{}, nonInt
 	fmt.Printf("Wrote %s (merged, not replaced).\n", settingsPath)
 	fmt.Printf("Also export: export OTEL_EXPORTER_OTLP_ENDPOINT=\"%s\"\n", endpoint)
 	fmt.Println("(only needed if the collector isn't at the settings.json default of localhost:4317)")
+	printNextSteps("Use `gemini` as normal", "Token & Cost Usage")
 	return nil
 }
 
@@ -257,7 +267,12 @@ func connectCursor(endpoint string, yamlConfig map[string]interface{}, nonIntera
 	agent := agents.CursorAgent{}
 
 	if _, err := exec.LookPath("agentobs"); err != nil {
-		fmt.Println("Warning: `agentobs` isn't on PATH -- the hook wrapper script execs it by name.")
+		exe, _ := os.Executable()
+		fmt.Printf(
+			"Warning: `agentobs` isn't on PATH -- Cursor's hook wrapper script execs it by name and will fail.\n"+
+				"Fix: run `go install ./cli/cmd/agentobs` (adds to $GOPATH/bin), or add %s's directory to your PATH.\n",
+			exe,
+		)
 	}
 
 	maskPrompts, err := config.Resolve("connect.mask_prompts", (*bool)(nil), yamlConfig, func() (bool, error) {
@@ -333,7 +348,7 @@ func connectCursor(endpoint string, yamlConfig map[string]interface{}, nonIntera
 	}
 
 	fmt.Printf("Wrote %s, %s, and %s (merged, not replaced).\n", configPath, wrapperPath, hooksJSONPath)
-	fmt.Println("Restart Cursor IDE to pick up the new hooks.")
+	printNextSteps("Restart Cursor IDE to pick up the new hooks", "Cursor Traces")
 	return nil
 }
 
