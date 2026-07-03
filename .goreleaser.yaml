@@ -4,8 +4,7 @@ project_name: agentobs
 
 before:
   hooks:
-    - cmd: go mod tidy
-      dir: cli
+    - sh -c "cd cli && go mod tidy"
 
 builds:
   - id: agentobs
