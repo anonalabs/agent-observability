@@ -1,3 +1,4 @@
 export.json
 .DS_Store
 cli/agentobs
+grafana/provisioning/alerting/contactpoints.yaml

@@ -64,6 +64,7 @@ Full design rationale, including how to add another agent, in [docs/architecture
 | [docs/cursor.md](docs/cursor.md) | Cursor hook shim reference |
 | [docs/architecture.md](docs/architecture.md) | System design + cloud export options |
 | [docs/security.md](docs/security.md) | Opt-in auth hardening (`agentobs install --secure`) |
+| [docs/alerting.md](docs/alerting.md) | Cost/rate-limit/tool-failure alert rules + webhook delivery |
 | [cli/README.md](cli/README.md) | `agentobs` CLI internals |
 
 ## Contributing
