@@ -6,28 +6,34 @@
 agentobs config-alerts
 ```
 
-Prompts (or takes flags, for non-interactive/CI use) for everything -- no editing YAML by hand, no hardcoded thresholds:
+Prompts first for which agents to configure (Claude Code, Cursor, or both), then only the thresholds relevant to what you picked -- no editing YAML by hand, no hardcoded thresholds:
 
 ```bash
 agentobs config-alerts --non-interactive \
+  --agents claude-code,cursor \
   --webhook-url "https://hooks.slack.com/services/..." \
   --contact-type slack \
   --cost-threshold 10 \
   --rate-limit-threshold 2 \
-  --tool-failure-threshold 5
+  --claude-tool-failure-threshold 5 \
+  --cursor-tool-failure-threshold 5
 ```
 
 | Flag | Meaning | Default |
 |---|---|---|
-| `--webhook-url` | Slack incoming webhook, Discord webhook, PagerDuty, or any URL accepting a POST | (required) |
+| `--agents` | comma-separated agents to configure: `claude-code`, `cursor`, or both | both |
+| `--webhook-url` | Slack incoming webhook, Discord webhook, PagerDuty, or any URL accepting a POST -- shared by every agent's alerts | (required) |
 | `--contact-type` | `slack` (also works for Discord's Slack-compatible webhooks) or `webhook` (generic JSON) | `slack` |
-| `--cost-threshold` | USD/hour that triggers the Claude Code cost-spike alert | `5` |
-| `--rate-limit-threshold` | 429 errors in 5 minutes that trigger the rate-limit alert | `0` (any hit) |
-| `--tool-failure-threshold` | failed tool calls in 15 minutes that trigger the tool-failure alert | `3` |
+| `--cost-threshold` | Claude Code: USD/hour that triggers the cost-spike alert | `5` |
+| `--rate-limit-threshold` | Claude Code: 429 errors in 5 minutes that trigger the rate-limit alert | `0` (any hit) |
+| `--claude-tool-failure-threshold` | Claude Code: failed tool calls in 15 minutes that trigger its tool-failure alert | `3` |
+| `--cursor-tool-failure-threshold` | Cursor: failed tool calls in 15 minutes that trigger its own, separately-thresholded tool-failure alert | `3` |
 | `--restart` / `--no-restart` | restart Grafana automatically to apply (default: restart) | `true` |
 | `--critical-webhook-url` | separate webhook for critical-severity alerts (currently just the rate-limit rule) -- e.g. a paging channel instead of a general one | (same as `--webhook-url`) |
 
-This generates `grafana/provisioning/alerting/rules.yaml` and `contactpoints.yaml` from scratch every run (both are plain Go structs marshaled to YAML, not string templates with baked-in numbers) and restarts Grafana. `contactpoints.yaml` is gitignored since it holds your webhook URL -- re-run `config-alerts` any time to change thresholds or rotate the webhook, nothing to hand-edit.
+This generates `grafana/provisioning/alerting/rules.yaml` and `contactpoints.yaml` from scratch every run (both are plain Go structs marshaled to YAML, not string templates with baked-in numbers) and restarts Grafana. `contactpoints.yaml` is gitignored since it holds your webhook URL -- re-run `config-alerts` any time to change thresholds, agents, or rotate the webhook, nothing to hand-edit. Re-running with a narrower `--agents` list removes the rules for whichever agent you dropped (the rule file also carries an explicit `deleteRules` block for exactly this, since Grafana's file provisioner otherwise leaves stale rules behind).
+
+The webhook is shared across every agent: one `config-alerts` run configures the notification channel for the whole stack, not per-agent -- only the thresholds and which rules exist are agent-specific.
 
 ## What gets alerted on
 
@@ -35,9 +41,12 @@ This generates `grafana/provisioning/alerting/rules.yaml` and `contactpoints.yam
 |---|---|---|---|
 | Claude Code cost spike | `increase(claude_code_cost_usage_USD_total[1h])` against your cost threshold | warning | Claude Code only (only agent with cost data) |
 | Claude Code hitting API rate limits (429s) | count of `api_error` events with `status_code=429` in the last 5 minutes | critical | Claude Code only |
-| AI agent tool call failures | count of failed tool calls in the last 15 minutes -- unions `otel_logs` (Claude Code/Gemini CLI) and `otel_traces` (Cursor, matched on `StatusCode='STATUS_CODE_ERROR'`) | warning | all agents |
+| Claude Code tool call failures | count of `tool_result` events with `success=false` in the last 15 minutes, own threshold | warning | Claude Code only |
+| Cursor tool call failures | count of `otel_traces` spans with `StatusCode='STATUS_CODE_ERROR'` and `gen_ai.operation.name='tool'` in the last 15 minutes, own threshold | warning | Cursor only |
 
-Notifications are grouped by `alertname`, held for 30s to batch near-simultaneous firings, and re-sent at most every 4 hours while still firing -- so a sustained problem doesn't re-page you every evaluation cycle. `noDataState` is `OK` on all three rules: no data (e.g. idle machine, no Claude Code activity in the last hour) is not an error condition and won't fire an alert -- only an actual breach of the threshold does.
+Claude Code and Cursor tool-failure rules are separate so each can have its own threshold instead of one shared cross-agent count -- Cursor's raw failure rate can be tuned independently of Claude Code's.
+
+Notifications are grouped by `alertname`, held for 30s to batch near-simultaneous firings, and re-sent at most every 4 hours while still firing -- so a sustained problem doesn't re-page you every evaluation cycle. `noDataState` is `OK` on every rule: no data (e.g. idle machine, no activity in the evaluation window) is not an error condition and won't fire an alert -- only an actual breach of the threshold does.
 
 Slack/Discord notifications use a custom `title`/`text` template (not Grafana's default, which dumps every label and raw query values like `A=4, C=1`) -- each notification is just the rule name, status, the human-readable summary (with the real count and threshold filled in), and a link back to Grafana.
 

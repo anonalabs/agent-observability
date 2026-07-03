@@ -73,8 +73,8 @@ groups:
             severity: critical
           annotations:
             summary: 'Claude Code hit {{ $values.A }} API rate-limit (429) errors in the last 5 minutes (threshold: 0). See the events-detail dashboard.'
-        - uid: agentobs-tool-failure-spike
-          title: AI agent tool call failures
+        - uid: agentobs-tool-failure-claude
+          title: Claude Code tool call failures
           condition: C
           data:
             - refId: A
@@ -84,7 +84,7 @@ groups:
               datasourceUid: ClickHouse
               model:
                 format: 1
-                rawSql: SELECT count() AS value FROM (SELECT Timestamp FROM otel.otel_logs WHERE LogAttributes['event.name']='tool_result' AND LogAttributes['success']='false' UNION ALL SELECT Timestamp FROM otel.otel_traces WHERE StatusCode='STATUS_CODE_ERROR' AND SpanAttributes['gen_ai.operation.name']='tool')
+                rawSql: SELECT count() AS value FROM otel.otel_logs WHERE LogAttributes['event.name']='tool_result' AND LogAttributes['success']='false'
                 refId: A
             - refId: C
               relativeTimeRange:
@@ -106,4 +106,41 @@ groups:
           labels:
             severity: warning
           annotations:
-            summary: '{{ $values.A }} tool calls failed across agents in the last 15 minutes (threshold: 3). See the agent-leaderboard dashboard.'
+            summary: '{{ $values.A }} tool calls failed in the last 15 minutes (threshold: 3). See the agent-leaderboard dashboard.'
+        - uid: agentobs-tool-failure-cursor
+          title: Cursor tool call failures
+          condition: C
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 900
+                to: 0
+              datasourceUid: ClickHouse
+              model:
+                format: 1
+                rawSql: SELECT count() AS value FROM otel.otel_traces WHERE StatusCode='STATUS_CODE_ERROR' AND SpanAttributes['gen_ai.operation.name']='tool'
+                refId: A
+            - refId: C
+              relativeTimeRange:
+                from: 900
+                to: 0
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 3
+                        type: gt
+                expression: A
+                refId: C
+                type: threshold
+          noDataState: OK
+          execErrState: Error
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: '{{ $values.A }} tool calls failed in the last 15 minutes (threshold: 3). See the agent-leaderboard dashboard.'
+deleteRules:
+    - orgId: 1
+      uid: agentobs-tool-failure-spike

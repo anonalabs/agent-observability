@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
@@ -19,8 +20,14 @@ import (
 // so thresholds/webhook are never hardcoded anywhere in this binary.
 
 type ruleFile struct {
-	APIVersion int         `yaml:"apiVersion"`
-	Groups     []ruleGroup `yaml:"groups"`
+	APIVersion  int          `yaml:"apiVersion"`
+	Groups      []ruleGroup  `yaml:"groups"`
+	DeleteRules []deleteRule `yaml:"deleteRules,omitempty"`
+}
+
+type deleteRule struct {
+	OrgID int    `yaml:"orgId"`
+	UID   string `yaml:"uid"`
 }
 
 type ruleGroup struct {
@@ -89,7 +96,183 @@ type route struct {
 	Continue bool     `yaml:"continue,omitempty"`
 }
 
-func buildRules(costThreshold float64, rateLimitThreshold, toolFailureThreshold int) ruleFile {
+// alertConfig controls which agents get rules and at what thresholds.
+// Claude Code is the only agent with cost/rate-limit data in the shape the
+// cost-spike and rate-limit rules expect, so those two are always
+// Claude-Code-scoped; tool-failure gets its own rule per selected agent so
+// each can have its own threshold instead of one shared cross-agent count.
+type alertConfig struct {
+	claudeCode                 bool
+	cursor                     bool
+	costThreshold              float64
+	rateLimitThreshold         int
+	claudeToolFailureThreshold int
+	cursorToolFailureThreshold int
+}
+
+func toolFailureRule(uid, title, rawSQL string, threshold int, dashboard string) alertRule {
+	return alertRule{
+		UID:       uid,
+		Title:     title,
+		Condition: "C",
+		Data: []queryData{
+			{
+				RefID:             "A",
+				RelativeTimeRange: timeRange{From: 900, To: 0},
+				DatasourceUID:     "ClickHouse",
+				Model: map[string]interface{}{
+					"refId":  "A",
+					"rawSql": rawSQL,
+					"format": 1,
+				},
+			},
+			{
+				RefID:             "C",
+				RelativeTimeRange: timeRange{From: 900, To: 0},
+				DatasourceUID:     "__expr__",
+				Model: map[string]interface{}{
+					"refId":      "C",
+					"type":       "threshold",
+					"expression": "A",
+					"conditions": []map[string]interface{}{
+						{"evaluator": map[string]interface{}{"type": "gt", "params": []int{threshold}}},
+					},
+				},
+			},
+		},
+		NoDataState:  "OK",
+		ExecErrState: "Error",
+		For:          "5m",
+		Labels:       map[string]string{"severity": "warning"},
+		Annotations: map[string]string{
+			"summary": fmt.Sprintf("{{ $values.A }} tool calls failed in the last 15 minutes (threshold: %d). See the %s dashboard.", threshold, dashboard),
+		},
+	}
+}
+
+// allKnownRuleUIDs is every rule UID this command has ever provisioned,
+// across all versions -- used to compute deleteRules so switching --agents
+// (or upgrading from an older version) actually removes rules that are no
+// longer selected, instead of leaving them stale (Grafana's file provisioner
+// only adds/updates rules present in the file, it doesn't prune on its own).
+var allKnownRuleUIDs = []string{
+	"agentobs-cost-spike",
+	"agentobs-rate-limit-spike",
+	"agentobs-tool-failure-claude",
+	"agentobs-tool-failure-cursor",
+	"agentobs-tool-failure-spike", // legacy unified rule, pre-per-agent split
+}
+
+func buildRules(cfg alertConfig) ruleFile {
+	var rules []alertRule
+
+	if cfg.claudeCode {
+		rules = append(rules,
+			alertRule{
+				UID:       "agentobs-cost-spike",
+				Title:     "Claude Code cost spike",
+				Condition: "C",
+				Data: []queryData{
+					{
+						RefID:             "A",
+						RelativeTimeRange: timeRange{From: 3600, To: 0},
+						DatasourceUID:     "Prometheus",
+						Model: map[string]interface{}{
+							"refId":   "A",
+							"expr":    "increase(claude_code_cost_usage_USD_total[1h])",
+							"instant": true,
+						},
+					},
+					{
+						RefID:             "C",
+						RelativeTimeRange: timeRange{From: 3600, To: 0},
+						DatasourceUID:     "__expr__",
+						Model: map[string]interface{}{
+							"refId":      "C",
+							"type":       "threshold",
+							"expression": "A",
+							"conditions": []map[string]interface{}{
+								{"evaluator": map[string]interface{}{"type": "gt", "params": []float64{cfg.costThreshold}}},
+							},
+						},
+					},
+				},
+				NoDataState:  "OK",
+				ExecErrState: "Error",
+				For:          "5m",
+				Labels:       map[string]string{"severity": "warning"},
+				Annotations: map[string]string{
+					"summary": fmt.Sprintf("Claude Code cost rose by ${{ $values.A }} in the last hour (threshold: $%s). See the token-cost-usage dashboard.", strconv.FormatFloat(cfg.costThreshold, 'f', -1, 64)),
+				},
+			},
+			alertRule{
+				UID:       "agentobs-rate-limit-spike",
+				Title:     "Claude Code hitting API rate limits (429s)",
+				Condition: "C",
+				Data: []queryData{
+					{
+						RefID:             "A",
+						RelativeTimeRange: timeRange{From: 300, To: 0},
+						DatasourceUID:     "ClickHouse",
+						Model: map[string]interface{}{
+							"refId":  "A",
+							"rawSql": "SELECT count() AS value FROM otel.otel_logs WHERE LogAttributes['event.name']='api_error' AND LogAttributes['status_code']='429'",
+							"format": 1,
+						},
+					},
+					{
+						RefID:             "C",
+						RelativeTimeRange: timeRange{From: 300, To: 0},
+						DatasourceUID:     "__expr__",
+						Model: map[string]interface{}{
+							"refId":      "C",
+							"type":       "threshold",
+							"expression": "A",
+							"conditions": []map[string]interface{}{
+								{"evaluator": map[string]interface{}{"type": "gt", "params": []int{cfg.rateLimitThreshold}}},
+							},
+						},
+					},
+				},
+				NoDataState:  "OK",
+				ExecErrState: "Error",
+				For:          "1m",
+				Labels:       map[string]string{"severity": "critical"},
+				Annotations: map[string]string{
+					"summary": fmt.Sprintf("Claude Code hit {{ $values.A }} API rate-limit (429) errors in the last 5 minutes (threshold: %d). See the events-detail dashboard.", cfg.rateLimitThreshold),
+				},
+			},
+			toolFailureRule(
+				"agentobs-tool-failure-claude",
+				"Claude Code tool call failures",
+				"SELECT count() AS value FROM otel.otel_logs WHERE LogAttributes['event.name']='tool_result' AND LogAttributes['success']='false'",
+				cfg.claudeToolFailureThreshold,
+				"agent-leaderboard",
+			),
+		)
+	}
+
+	if cfg.cursor {
+		rules = append(rules, toolFailureRule(
+			"agentobs-tool-failure-cursor",
+			"Cursor tool call failures",
+			"SELECT count() AS value FROM otel.otel_traces WHERE StatusCode='STATUS_CODE_ERROR' AND SpanAttributes['gen_ai.operation.name']='tool'",
+			cfg.cursorToolFailureThreshold,
+			"agent-leaderboard",
+		))
+	}
+
+	present := map[string]bool{}
+	for _, r := range rules {
+		present[r.UID] = true
+	}
+	var toDelete []deleteRule
+	for _, uid := range allKnownRuleUIDs {
+		if !present[uid] {
+			toDelete = append(toDelete, deleteRule{OrgID: 1, UID: uid})
+		}
+	}
+
 	return ruleFile{
 		APIVersion: 1,
 		Groups: []ruleGroup{
@@ -98,124 +281,10 @@ func buildRules(costThreshold float64, rateLimitThreshold, toolFailureThreshold 
 				Name:     "agentobs-alerts",
 				Folder:   "AI Agent Telemetry",
 				Interval: "1m",
-				Rules: []alertRule{
-					{
-						UID:       "agentobs-cost-spike",
-						Title:     "Claude Code cost spike",
-						Condition: "C",
-						Data: []queryData{
-							{
-								RefID:             "A",
-								RelativeTimeRange: timeRange{From: 3600, To: 0},
-								DatasourceUID:     "Prometheus",
-								Model: map[string]interface{}{
-									"refId":   "A",
-									"expr":    "increase(claude_code_cost_usage_USD_total[1h])",
-									"instant": true,
-								},
-							},
-							{
-								RefID:             "C",
-								RelativeTimeRange: timeRange{From: 3600, To: 0},
-								DatasourceUID:     "__expr__",
-								Model: map[string]interface{}{
-									"refId":      "C",
-									"type":       "threshold",
-									"expression": "A",
-									"conditions": []map[string]interface{}{
-										{"evaluator": map[string]interface{}{"type": "gt", "params": []float64{costThreshold}}},
-									},
-								},
-							},
-						},
-						NoDataState:  "OK",
-						ExecErrState: "Error",
-						For:          "5m",
-						Labels:       map[string]string{"severity": "warning"},
-						Annotations: map[string]string{
-							"summary": fmt.Sprintf("Claude Code cost rose by ${{ $values.A }} in the last hour (threshold: $%s). See the token-cost-usage dashboard.", strconv.FormatFloat(costThreshold, 'f', -1, 64)),
-						},
-					},
-					{
-						UID:       "agentobs-rate-limit-spike",
-						Title:     "Claude Code hitting API rate limits (429s)",
-						Condition: "C",
-						Data: []queryData{
-							{
-								RefID:             "A",
-								RelativeTimeRange: timeRange{From: 300, To: 0},
-								DatasourceUID:     "ClickHouse",
-								Model: map[string]interface{}{
-									"refId":  "A",
-									"rawSql": "SELECT count() AS value FROM otel.otel_logs WHERE LogAttributes['event.name']='api_error' AND LogAttributes['status_code']='429'",
-									"format": 1,
-								},
-							},
-							{
-								RefID:             "C",
-								RelativeTimeRange: timeRange{From: 300, To: 0},
-								DatasourceUID:     "__expr__",
-								Model: map[string]interface{}{
-									"refId":      "C",
-									"type":       "threshold",
-									"expression": "A",
-									"conditions": []map[string]interface{}{
-										{"evaluator": map[string]interface{}{"type": "gt", "params": []int{rateLimitThreshold}}},
-									},
-								},
-							},
-						},
-						NoDataState:  "OK",
-						ExecErrState: "Error",
-						For:          "1m",
-						Labels:       map[string]string{"severity": "critical"},
-						Annotations: map[string]string{
-							"summary": fmt.Sprintf("Claude Code hit {{ $values.A }} API rate-limit (429) errors in the last 5 minutes (threshold: %d). See the events-detail dashboard.", rateLimitThreshold),
-						},
-					},
-					{
-						UID:       "agentobs-tool-failure-spike",
-						Title:     "AI agent tool call failures",
-						Condition: "C",
-						Data: []queryData{
-							{
-								RefID:             "A",
-								RelativeTimeRange: timeRange{From: 900, To: 0},
-								DatasourceUID:     "ClickHouse",
-								Model: map[string]interface{}{
-									"refId": "A",
-									"rawSql": "SELECT count() AS value FROM (" +
-										"SELECT Timestamp FROM otel.otel_logs WHERE LogAttributes['event.name']='tool_result' AND LogAttributes['success']='false' " +
-										"UNION ALL " +
-										"SELECT Timestamp FROM otel.otel_traces WHERE StatusCode='STATUS_CODE_ERROR' AND SpanAttributes['gen_ai.operation.name']='tool')",
-									"format": 1,
-								},
-							},
-							{
-								RefID:             "C",
-								RelativeTimeRange: timeRange{From: 900, To: 0},
-								DatasourceUID:     "__expr__",
-								Model: map[string]interface{}{
-									"refId":      "C",
-									"type":       "threshold",
-									"expression": "A",
-									"conditions": []map[string]interface{}{
-										{"evaluator": map[string]interface{}{"type": "gt", "params": []int{toolFailureThreshold}}},
-									},
-								},
-							},
-						},
-						NoDataState:  "OK",
-						ExecErrState: "Error",
-						For:          "5m",
-						Labels:       map[string]string{"severity": "warning"},
-						Annotations: map[string]string{
-							"summary": fmt.Sprintf("{{ $values.A }} tool calls failed across agents in the last 15 minutes (threshold: %d). See the agent-leaderboard dashboard.", toolFailureThreshold),
-						},
-					},
-				},
+				Rules:    rules,
 			},
 		},
+		DeleteRules: toDelete,
 	}
 }
 
@@ -287,16 +356,41 @@ func alertingDir(baseComposeFile string) string {
 }
 
 func ConfigAlertsCmd() *cobra.Command {
-	var composeFile, webhookURL, criticalWebhookURL, contactType string
+	var composeFile, webhookURL, criticalWebhookURL, contactType, agentsFlag string
 	var costThreshold float64
-	var rateLimitThreshold, toolFailureThreshold int
+	var rateLimitThreshold, claudeToolFailureThreshold, cursorToolFailureThreshold int
 	var nonInteractive, restart bool
-	var costThresholdSet, rateLimitThresholdSet, toolFailureThresholdSet, contactTypeSet bool
+	var costThresholdSet, rateLimitThresholdSet, claudeToolFailureThresholdSet, cursorToolFailureThresholdSet, contactTypeSet, agentsSet bool
 
 	cmd := &cobra.Command{
 		Use:   "config-alerts",
 		Short: "Configure alert thresholds and the notification webhook (Slack, Discord, etc.)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var agentsFlagPtr *string
+			if agentsSet {
+				agentsFlagPtr = &agentsFlag
+			}
+			defAgents := "claude-code,cursor"
+			resolvedAgents, err := config.Resolve("config_alerts.agents", agentsFlagPtr, nil, func() (string, error) {
+				var v []string
+				err := survey.AskOne(&survey.MultiSelect{
+					Message: "Which agents do you want to configure alerts for?",
+					Options: []string{"claude-code", "cursor"},
+					Default: []string{"claude-code", "cursor"},
+				}, &v)
+				return strings.Join(v, ","), err
+			}, nonInteractive, &defAgents)
+			if err != nil {
+				return err
+			}
+			selected := map[string]bool{}
+			for _, a := range strings.Split(resolvedAgents, ",") {
+				selected[strings.TrimSpace(a)] = true
+			}
+			if !selected["claude-code"] && !selected["cursor"] {
+				return fmt.Errorf("--agents must include at least one of: claude-code, cursor")
+			}
+
 			var webhookURLFlagPtr *string
 			if cmd.Flags().Changed("webhook-url") {
 				webhookURLFlagPtr = &webhookURL
@@ -334,55 +428,78 @@ func ConfigAlertsCmd() *cobra.Command {
 				return err
 			}
 
-			var costFlagPtr *float64
-			if costThresholdSet {
-				costFlagPtr = &costThreshold
-			}
-			defCost := 5.0
-			resolvedCost, err := config.Resolve("config_alerts.cost_threshold", costFlagPtr, nil, func() (float64, error) {
-				var v string
-				err := survey.AskOne(&survey.Input{Message: "Alert when Claude Code cost exceeds this many USD/hour:", Default: "5"}, &v)
-				if err != nil {
-					return 0, err
+			cfg := alertConfig{claudeCode: selected["claude-code"], cursor: selected["cursor"]}
+
+			if cfg.claudeCode {
+				var costFlagPtr *float64
+				if costThresholdSet {
+					costFlagPtr = &costThreshold
 				}
-				return strconv.ParseFloat(v, 64)
-			}, nonInteractive, &defCost)
-			if err != nil {
-				return err
+				defCost := 5.0
+				cfg.costThreshold, err = config.Resolve("config_alerts.cost_threshold", costFlagPtr, nil, func() (float64, error) {
+					var v string
+					err := survey.AskOne(&survey.Input{Message: "Claude Code: alert when cost exceeds this many USD/hour:", Default: "5"}, &v)
+					if err != nil {
+						return 0, err
+					}
+					return strconv.ParseFloat(v, 64)
+				}, nonInteractive, &defCost)
+				if err != nil {
+					return err
+				}
+
+				var rateLimitFlagPtr *int
+				if rateLimitThresholdSet {
+					rateLimitFlagPtr = &rateLimitThreshold
+				}
+				defRateLimit := 0
+				cfg.rateLimitThreshold, err = config.Resolve("config_alerts.rate_limit_threshold", rateLimitFlagPtr, nil, func() (int, error) {
+					var v string
+					err := survey.AskOne(&survey.Input{Message: "Claude Code: alert when 429 rate-limit errors in 5 minutes exceed:", Default: "0"}, &v)
+					if err != nil {
+						return 0, err
+					}
+					return strconv.Atoi(v)
+				}, nonInteractive, &defRateLimit)
+				if err != nil {
+					return err
+				}
+
+				var claudeToolFailureFlagPtr *int
+				if claudeToolFailureThresholdSet {
+					claudeToolFailureFlagPtr = &claudeToolFailureThreshold
+				}
+				defClaudeToolFailure := 3
+				cfg.claudeToolFailureThreshold, err = config.Resolve("config_alerts.claude_tool_failure_threshold", claudeToolFailureFlagPtr, nil, func() (int, error) {
+					var v string
+					err := survey.AskOne(&survey.Input{Message: "Claude Code: alert when failed tool calls in 15 minutes exceed:", Default: "3"}, &v)
+					if err != nil {
+						return 0, err
+					}
+					return strconv.Atoi(v)
+				}, nonInteractive, &defClaudeToolFailure)
+				if err != nil {
+					return err
+				}
 			}
 
-			var rateLimitFlagPtr *int
-			if rateLimitThresholdSet {
-				rateLimitFlagPtr = &rateLimitThreshold
-			}
-			defRateLimit := 0
-			resolvedRateLimit, err := config.Resolve("config_alerts.rate_limit_threshold", rateLimitFlagPtr, nil, func() (int, error) {
-				var v string
-				err := survey.AskOne(&survey.Input{Message: "Alert when 429 rate-limit errors in 5 minutes exceed:", Default: "0"}, &v)
-				if err != nil {
-					return 0, err
+			if cfg.cursor {
+				var cursorToolFailureFlagPtr *int
+				if cursorToolFailureThresholdSet {
+					cursorToolFailureFlagPtr = &cursorToolFailureThreshold
 				}
-				return strconv.Atoi(v)
-			}, nonInteractive, &defRateLimit)
-			if err != nil {
-				return err
-			}
-
-			var toolFailureFlagPtr *int
-			if toolFailureThresholdSet {
-				toolFailureFlagPtr = &toolFailureThreshold
-			}
-			defToolFailure := 3
-			resolvedToolFailure, err := config.Resolve("config_alerts.tool_failure_threshold", toolFailureFlagPtr, nil, func() (int, error) {
-				var v string
-				err := survey.AskOne(&survey.Input{Message: "Alert when failed tool calls in 15 minutes exceed:", Default: "3"}, &v)
+				defCursorToolFailure := 3
+				cfg.cursorToolFailureThreshold, err = config.Resolve("config_alerts.cursor_tool_failure_threshold", cursorToolFailureFlagPtr, nil, func() (int, error) {
+					var v string
+					err := survey.AskOne(&survey.Input{Message: "Cursor: alert when failed tool calls in 15 minutes exceed:", Default: "3"}, &v)
+					if err != nil {
+						return 0, err
+					}
+					return strconv.Atoi(v)
+				}, nonInteractive, &defCursorToolFailure)
 				if err != nil {
-					return 0, err
+					return err
 				}
-				return strconv.Atoi(v)
-			}, nonInteractive, &defToolFailure)
-			if err != nil {
-				return err
 			}
 
 			resolvedComposeFile, err := compose.ResolveComposeFile(composeFile)
@@ -395,7 +512,7 @@ func ConfigAlertsCmd() *cobra.Command {
 			}
 
 			rulesPath := filepath.Join(dir, "rules.yaml")
-			rulesOut, err := yaml.Marshal(buildRules(resolvedCost, resolvedRateLimit, resolvedToolFailure))
+			rulesOut, err := yaml.Marshal(buildRules(cfg))
 			if err != nil {
 				return err
 			}
@@ -435,21 +552,25 @@ func ConfigAlertsCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&composeFile, "compose-file", "", "")
+	cmd.Flags().StringVar(&agentsFlag, "agents", "", "comma-separated agents to configure: claude-code,cursor (default: both)")
 	cmd.Flags().StringVar(&webhookURL, "webhook-url", "", "Slack/Discord/etc. webhook URL")
 	cmd.Flags().StringVar(&criticalWebhookURL, "critical-webhook-url", "", "optional separate webhook for critical-severity alerts (default: same as --webhook-url)")
 	cmd.Flags().StringVar(&contactType, "contact-type", "", "slack or webhook (default: slack)")
-	cmd.Flags().Float64Var(&costThreshold, "cost-threshold", 0, "USD/hour cost alert threshold (default: 5)")
-	cmd.Flags().IntVar(&rateLimitThreshold, "rate-limit-threshold", 0, "429 count/5min alert threshold (default: 0)")
-	cmd.Flags().IntVar(&toolFailureThreshold, "tool-failure-threshold", 0, "failed tool calls/15min alert threshold (default: 3)")
+	cmd.Flags().Float64Var(&costThreshold, "cost-threshold", 0, "Claude Code: USD/hour cost alert threshold (default: 5)")
+	cmd.Flags().IntVar(&rateLimitThreshold, "rate-limit-threshold", 0, "Claude Code: 429 count/5min alert threshold (default: 0)")
+	cmd.Flags().IntVar(&claudeToolFailureThreshold, "claude-tool-failure-threshold", 0, "Claude Code: failed tool calls/15min alert threshold (default: 3)")
+	cmd.Flags().IntVar(&cursorToolFailureThreshold, "cursor-tool-failure-threshold", 0, "Cursor: failed tool calls/15min alert threshold (default: 3)")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "")
 	cmd.Flags().BoolVar(&nonInteractive, "yes", false, "")
 	cmd.Flags().BoolVar(&restart, "restart", true, "restart Grafana automatically after writing config")
 
 	cmd.PreRun = func(cmd *cobra.Command, args []string) {
+		agentsSet = cmd.Flags().Changed("agents")
 		contactTypeSet = cmd.Flags().Changed("contact-type")
 		costThresholdSet = cmd.Flags().Changed("cost-threshold")
 		rateLimitThresholdSet = cmd.Flags().Changed("rate-limit-threshold")
-		toolFailureThresholdSet = cmd.Flags().Changed("tool-failure-threshold")
+		claudeToolFailureThresholdSet = cmd.Flags().Changed("claude-tool-failure-threshold")
+		cursorToolFailureThresholdSet = cmd.Flags().Changed("cursor-tool-failure-threshold")
 	}
 
 	return cmd
