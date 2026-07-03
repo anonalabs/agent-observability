@@ -1,91 +1,109 @@
 apiVersion: 1
-
 groups:
-  - orgId: 1
-    name: agentobs-alerts
-    folder: AI Agent Telemetry
-    interval: 1m
-    rules:
-      - uid: agentobs-cost-spike
-        title: "Claude Code cost spike"
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange: { from: 3600, to: 0 }
-            datasourceUid: Prometheus
-            model:
-              refId: A
-              expr: "increase(claude_code_cost_usage_USD_total[1h])"
-              instant: true
-          - refId: C
-            relativeTimeRange: { from: 3600, to: 0 }
-            datasourceUid: __expr__
-            model:
-              refId: C
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator: { type: gt, params: [5] }
-        noDataState: NoData
-        execErrState: Error
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Claude Code cost increased by more than $5 in the last hour. Edit the threshold in grafana/provisioning/alerting/rules.yaml."
-
-      - uid: agentobs-rate-limit-spike
-        title: "Claude Code hitting API rate limits (429s)"
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange: { from: 300, to: 0 }
-            datasourceUid: ClickHouse
-            model:
-              refId: A
-              rawSql: "SELECT count() AS value FROM otel.otel_logs WHERE LogAttributes['event.name']='api_error' AND LogAttributes['status_code']='429'"
-              format: 1
-          - refId: C
-            relativeTimeRange: { from: 300, to: 0 }
-            datasourceUid: __expr__
-            model:
-              refId: C
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator: { type: gt, params: [0] }
-        noDataState: NoData
-        execErrState: Error
-        for: 1m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Claude Code hit a 429 rate limit in the last 5 minutes -- a real productivity blocker signal."
-
-      - uid: agentobs-tool-failure-spike
-        title: "Claude Code tool call failures"
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange: { from: 900, to: 0 }
-            datasourceUid: ClickHouse
-            model:
-              refId: A
-              rawSql: "SELECT count() AS value FROM otel.otel_logs WHERE LogAttributes['event.name']='tool_result' AND LogAttributes['success']='false'"
-              format: 1
-          - refId: C
-            relativeTimeRange: { from: 900, to: 0 }
-            datasourceUid: __expr__
-            model:
-              refId: C
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator: { type: gt, params: [3] }
-        noDataState: NoData
-        execErrState: Error
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "More than 3 tool calls failed in the last 15 minutes."
+    - orgId: 1
+      name: agentobs-alerts
+      folder: AI Agent Telemetry
+      interval: 1m
+      rules:
+        - uid: agentobs-cost-spike
+          title: Claude Code cost spike
+          condition: C
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 3600
+                to: 0
+              datasourceUid: Prometheus
+              model:
+                expr: increase(claude_code_cost_usage_USD_total[1h])
+                instant: true
+                refId: A
+            - refId: C
+              relativeTimeRange:
+                from: 3600
+                to: 0
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 5
+                        type: gt
+                expression: A
+                refId: C
+                type: threshold
+          noDataState: NoData
+          execErrState: Error
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Claude Code cost increased by more than $5 in the last hour.
+        - uid: agentobs-rate-limit-spike
+          title: Claude Code hitting API rate limits (429s)
+          condition: C
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 300
+                to: 0
+              datasourceUid: ClickHouse
+              model:
+                format: 1
+                rawSql: SELECT count() AS value FROM otel.otel_logs WHERE LogAttributes['event.name']='api_error' AND LogAttributes['status_code']='429'
+                refId: A
+            - refId: C
+              relativeTimeRange:
+                from: 300
+                to: 0
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 0
+                        type: gt
+                expression: A
+                refId: C
+                type: threshold
+          noDataState: NoData
+          execErrState: Error
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: Claude Code hit more than 0 API rate-limit (429) errors in the last 5 minutes.
+        - uid: agentobs-tool-failure-spike
+          title: Claude Code tool call failures
+          condition: C
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 900
+                to: 0
+              datasourceUid: ClickHouse
+              model:
+                format: 1
+                rawSql: SELECT count() AS value FROM otel.otel_logs WHERE LogAttributes['event.name']='tool_result' AND LogAttributes['success']='false'
+                refId: A
+            - refId: C
+              relativeTimeRange:
+                from: 900
+                to: 0
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 3
+                        type: gt
+                expression: A
+                refId: C
+                type: threshold
+          noDataState: NoData
+          execErrState: Error
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 3 tool calls failed in the last 15 minutes.

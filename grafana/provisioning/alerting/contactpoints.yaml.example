@@ -1,7 +1,8 @@
-# Copy this to contactpoints.yaml (gitignored) and fill in a real webhook URL
-# to enable alert delivery -- Slack incoming webhook, Discord webhook,
-# PagerDuty Events API, or anything else that accepts a POST.
+# Recommended: don't hand-edit this. Run `agentobs config-alerts` instead --
+# it prompts for the webhook URL and thresholds and generates both this file
+# and rules.yaml for you (see docs/alerting.md).
 #
+# Manual alternative, if you'd rather not use the CLI:
 #   cp contactpoints.yaml.example contactpoints.yaml
 #   # edit the url below
 #   docker compose restart grafana
@@ -12,10 +13,9 @@ contactPoints:
     name: agentobs-webhook
     receivers:
       - uid: agentobs-webhook-1
-        type: webhook
+        type: slack # use "slack" for Slack or Discord's /slack-compatible webhook URL, "webhook" for a generic JSON POST (PagerDuty, custom receivers, etc.)
         settings:
           url: "https://REPLACE_ME.example.com/webhook"
-          httpMethod: POST
 
 policies:
   - orgId: 1
