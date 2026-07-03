@@ -84,6 +84,21 @@ func SecureOverlayFile(baseComposeFile string) (string, error) {
 	return overlay, nil
 }
 
+var validClouds = map[string]bool{"aws": true, "gcp": true, "azure": true}
+
+// CloudOverlayFile locates docker-compose.cloud-<cloud>.yml next to the
+// resolved base compose file.
+func CloudOverlayFile(baseComposeFile, cloud string) (string, error) {
+	if !validClouds[cloud] {
+		return "", fmt.Errorf("unknown --cloud value %q (expected aws, gcp, or azure)", cloud)
+	}
+	overlay := filepath.Join(filepath.Dir(baseComposeFile), fmt.Sprintf("docker-compose.cloud-%s.yml", cloud))
+	if _, err := os.Stat(overlay); err != nil {
+		return "", fmt.Errorf("%s not found next to %s: %w", filepath.Base(overlay), baseComposeFile, err)
+	}
+	return overlay, nil
+}
+
 func DockerAvailable() bool {
 	cmd := exec.Command("docker", "info")
 	cmd.Stdout = nil

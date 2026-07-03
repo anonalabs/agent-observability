@@ -1,0 +1,11 @@
+# Azure cloud export overlay. Use with:
+#   agentobs install --cloud azure
+# or manually:
+#   AGENTOBS_AZURE_CONNECTION_STRING=... \
+#     docker compose -f docker-compose.yml -f docker-compose.cloud-azure.yml up -d
+services:
+  otel-collector:
+    volumes:
+      - ./collector/otel-collector-config.azure.yaml:/etc/otel-collector-config.yaml
+    environment:
+      - AGENTOBS_AZURE_CONNECTION_STRING=${AGENTOBS_AZURE_CONNECTION_STRING:?set AGENTOBS_AZURE_CONNECTION_STRING to your Application Insights connection string}

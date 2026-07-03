@@ -1,0 +1,77 @@
+# AWS cloud export overlay -- fans out to AWS alongside the existing local
+# Prometheus/ClickHouse exporters (not a replacement). Used via:
+#   agentobs install --cloud aws
+#
+# Requires these env vars set before `agentobs install --cloud aws`:
+#   AWS_REGION                       e.g. us-east-1
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (or any standard AWS credential
+#     chain source -- instance profile, SSO, etc. -- reachable from the
+#     otel-collector container)
+#   AGENTOBS_AMP_REMOTE_WRITE_URL     Amazon Managed Prometheus workspace's
+#                                     remote write endpoint
+#   AGENTOBS_CLOUDWATCH_LOG_GROUP     CloudWatch Logs group name (created if
+#                                     missing, given IAM permission)
+#
+# Not verified against a real AWS account in this repo -- verify collector
+# starts cleanly, then check your AWS console for delivered data.
+extensions:
+  sigv4auth:
+    region: "${env:AWS_REGION}"
+    service: "aps" # Amazon Managed Prometheus
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    ttl: 2160h
+    create_schema: true
+
+  prometheusremotewrite/aws:
+    endpoint: "${env:AGENTOBS_AMP_REMOTE_WRITE_URL}"
+    auth:
+      authenticator: sigv4auth
+
+  awscloudwatchlogs:
+    region: "${env:AWS_REGION}"
+    log_group_name: "${env:AGENTOBS_CLOUDWATCH_LOG_GROUP}"
+    log_stream_name: "agentobs"
+
+  awsxray:
+    region: "${env:AWS_REGION}"
+
+  debug:
+    verbosity: basic
+
+service:
+  extensions: [sigv4auth]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus, prometheusremotewrite/aws, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, awscloudwatchlogs, debug]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, awsxray, debug]

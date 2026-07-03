@@ -1,0 +1,55 @@
+# Azure cloud export overlay -- fans out to Azure Monitor alongside the
+# existing local Prometheus/ClickHouse exporters. Used via:
+#   agentobs install --cloud azure
+#
+# Requires:
+#   AGENTOBS_AZURE_CONNECTION_STRING  Application Insights connection string
+#
+# One exporter (azuremonitor) covers metrics, logs, and traces.
+# Not verified against a real Azure subscription in this repo -- verify
+# collector starts cleanly, then check Application Insights for delivered data.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    ttl: 2160h
+    create_schema: true
+
+  azuremonitor:
+    connection_string: "${env:AGENTOBS_AZURE_CONNECTION_STRING}"
+
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus, azuremonitor, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, azuremonitor, debug]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, azuremonitor, debug]

@@ -72,7 +72,7 @@ Full design rationale, including how to add another agent, in [docs/architecture
 Issues and PRs welcome. The most valuable contributions right now:
 - Support for another agent: if it already speaks OTel, it's a `~/.config/agentobs/agents.yaml` entry, zero code (`agentobs agents list` shows what's registered). If it doesn't, it needs a hook shim like `cli/internal/cursorhook/`.
 - More Agent Leaderboard panels as more agents get connected in the wild.
-- Cloud exporter wiring (AWS/GCP/Azure): mapped out but not built, see [docs/architecture.md](docs/architecture.md#cloud-export-options-reference-not-wired-up).
+- Verifying cloud export (`agentobs install --cloud aws|gcp|azure`, see [docs/architecture.md](docs/architecture.md#cloud-export)) against a real account -- built and confirmed to start cleanly, not yet confirmed to actually deliver data.
 
 ## License
 

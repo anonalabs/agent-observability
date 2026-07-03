@@ -36,6 +36,7 @@ func InstallCmd() *cobra.Command {
 	var detach bool
 	var nonInteractive bool
 	var secure bool
+	var cloud string
 
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -67,6 +68,10 @@ func InstallCmd() *cobra.Command {
 				}
 			}
 
+			if secure && cloud != "" {
+				return fmt.Errorf("--secure and --cloud can't be combined yet -- both override the collector config; pick one")
+			}
+
 			resolved, err := compose.ResolveComposeFile(composeFile)
 			if err != nil {
 				return err
@@ -86,6 +91,15 @@ func InstallCmd() *cobra.Command {
 					)
 				}
 				fmt.Println("Secure mode: anonymous Grafana access disabled, OTLP ingest requires a bearer token.")
+			}
+
+			if cloud != "" {
+				overlay, err := compose.CloudOverlayFile(resolved, cloud)
+				if err != nil {
+					return err
+				}
+				composeFiles = append(composeFiles, overlay)
+				fmt.Printf("Cloud export: %s (fanning out alongside local Prometheus/ClickHouse -- see docs/architecture.md).\n", cloud)
 			}
 
 			fmt.Printf("Starting stack via %v ...\n", composeFiles)
@@ -111,6 +125,7 @@ func InstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "")
 	cmd.Flags().BoolVar(&nonInteractive, "yes", false, "")
 	cmd.Flags().BoolVar(&secure, "secure", false, "require auth (Grafana login, collector bearer token); needs AGENTOBS_AUTH_TOKEN + GRAFANA_ADMIN_PASSWORD env vars")
+	cmd.Flags().StringVar(&cloud, "cloud", "", "also export to aws, gcp, or azure (see docs/architecture.md for required env vars per cloud)")
 
 	return cmd
 }

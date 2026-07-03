@@ -53,14 +53,16 @@ For a team bigger than one laptop, the same OTLP-in pipeline extends without red
 - **Alerting**: wire Grafana/CloudWatch alarms → SNS/Slack on token, cost, or `api_error` 429-rate thresholds.
 - **Privacy controls**: `agentobs connect`'s `--log-user-prompts`/`--log-tool-details` prompts already default these off; at fleet scale, redact at the collector (a processor stage) rather than trusting per-dev config if prompt/tool content shouldn't reach storage at all.
 
-## Cloud export options (reference, not wired up)
+## Cloud export
 
-If/when telemetry needs to leave a single laptop's Docker Compose stack, the same collector just gets an additional (or replacement) exporter -- no app-level changes, since the agents only ever talk OTLP to the collector.
+`agentobs install --cloud aws|gcp|azure` fans out to a cloud provider alongside the existing local Prometheus/ClickHouse (not a replacement -- both run).
 
 | Cloud | Metrics | Logs | Traces | Collector exporter |
 |---|---|---|---|---|
-| AWS | Amazon Managed Prometheus | CloudWatch Logs or Firehose → S3 → Athena | X-Ray or Managed Prometheus/Tempo | `awsemf` / `awsxray` / `awsprometheusremotewrite` (separate exporters per signal) |
+| AWS | Amazon Managed Prometheus | CloudWatch Logs | X-Ray | `awsprometheusremotewrite` / `awscloudwatchlogs` / `awsxray` (separate exporters per signal) |
 | GCP | Cloud Monitoring | Cloud Logging | Cloud Trace | `googlecloud` (one exporter covers all three signals) |
-| Azure | Azure Monitor Metrics | Log Analytics | Azure Monitor / App Insights | `azuremonitor` (one exporter covers all three signals) |
+| Azure | Azure Monitor Metrics | Log Analytics | Application Insights | `azuremonitor` (one exporter covers all three signals) |
 
-GCP/Azure are less config (one exporter each); AWS needs 2-3 separate exporters wired to different services. Local Prometheus/ClickHouse/Grafana doesn't have to be replaced -- collector pipelines support multiple exporters per signal, so local + cloud simultaneously is one config change, not a redesign. Main tradeoff: cloud-native costs per ingested point but gets managed retention/scaling/alerting for free.
+GCP/Azure are less config (one exporter each); AWS needs 3 separate exporters wired to different services, plus the `sigv4auth` extension for Amazon Managed Prometheus. Configs live in `collector/otel-collector-config.{aws,gcp,azure}.yaml`; each requires provider credentials passed as env vars (see the comments at the top of each file, or `docker-compose.cloud-{aws,gcp,azure}.yml` for the exact required var names).
+
+**Verified**: all three configs let the collector start cleanly (confirmed via `docker compose logs otel-collector` showing `Everything is ready`) with placeholder credentials. **Not verified**: actual delivery to a real AWS/GCP/Azure account, since that needs real credentials this repo doesn't have. `--secure` and `--cloud` can't be combined yet (both replace the collector config wholesale).

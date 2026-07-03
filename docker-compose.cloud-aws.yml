@@ -1,0 +1,17 @@
+# AWS cloud export overlay. Use with:
+#   agentobs install --cloud aws
+# or manually:
+#   AWS_REGION=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+#   AGENTOBS_AMP_REMOTE_WRITE_URL=... AGENTOBS_CLOUDWATCH_LOG_GROUP=... \
+#     docker compose -f docker-compose.yml -f docker-compose.cloud-aws.yml up -d
+services:
+  otel-collector:
+    volumes:
+      - ./collector/otel-collector-config.aws.yaml:/etc/otel-collector-config.yaml
+    environment:
+      - AWS_REGION=${AWS_REGION:?set AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - AGENTOBS_AMP_REMOTE_WRITE_URL=${AGENTOBS_AMP_REMOTE_WRITE_URL:?set AGENTOBS_AMP_REMOTE_WRITE_URL to your Amazon Managed Prometheus remote-write endpoint}
+      - AGENTOBS_CLOUDWATCH_LOG_GROUP=${AGENTOBS_CLOUDWATCH_LOG_GROUP:?set AGENTOBS_CLOUDWATCH_LOG_GROUP}

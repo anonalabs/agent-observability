@@ -1,0 +1,59 @@
+# GCP cloud export overlay -- fans out to Google Cloud alongside the existing
+# local Prometheus/ClickHouse exporters. Used via:
+#   agentobs install --cloud gcp
+#
+# Requires:
+#   GOOGLE_CLOUD_PROJECT              GCP project ID
+#   GOOGLE_APPLICATION_CREDENTIALS    path (inside the container) to a service
+#                                     account JSON key with Monitoring/Logging/
+#                                     Trace write roles -- mount it as a volume
+#                                     in docker-compose.cloud-gcp.yml
+#
+# One exporter (googlecloud) covers metrics, logs, and traces.
+# Not verified against a real GCP project in this repo -- verify collector
+# starts cleanly, then check Cloud Monitoring/Logging/Trace for delivered data.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    ttl: 2160h
+    create_schema: true
+
+  googlecloud:
+    project: "${env:GOOGLE_CLOUD_PROJECT}"
+
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus, googlecloud, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, googlecloud, debug]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, googlecloud, debug]

@@ -1,0 +1,17 @@
+# GCP cloud export overlay. Use with:
+#   agentobs install --cloud gcp
+# or manually:
+#   GOOGLE_CLOUD_PROJECT=... GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH=/path/to/key.json \
+#     docker compose -f docker-compose.yml -f docker-compose.cloud-gcp.yml up -d
+#
+# GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH must point at a service account
+# JSON key on the host with Monitoring/Logging/Trace write roles; it's bind
+# mounted into the container read-only.
+services:
+  otel-collector:
+    volumes:
+      - ./collector/otel-collector-config.gcp.yaml:/etc/otel-collector-config.yaml
+      - ${GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH:?set GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH to a service account JSON key file}:/etc/gcp-credentials.json:ro
+    environment:
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:?set GOOGLE_CLOUD_PROJECT}
+      - GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp-credentials.json
