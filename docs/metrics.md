@@ -1,10 +1,10 @@
 # Full metric & event reference (Claude Code)
 
-Claude Code emits all of this automatically once telemetry is on (`agentobs connect`, or the raw env vars in [setup.md](setup.md)) — nothing below requires extra configuration beyond enabling both exporters. Source: Claude Code's own OpenTelemetry docs.
+Claude Code emits all of this automatically once telemetry is on (`agentobs connect`, or the raw env vars in [setup.md](setup.md)), nothing below requires extra configuration beyond enabling both exporters. Source: Claude Code's own OpenTelemetry docs.
 
 ## Metrics (Prometheus)
 
-Names below are as they land in Prometheus after the collector's exporter (dots → underscores, `_total` suffix, unit sometimes embedded — verify actual names anytime with `curl localhost:9090/api/v1/label/__name__/values`).
+Names below are as they land in Prometheus after the collector's exporter (dots → underscores, `_total` suffix, unit sometimes embedded, verify actual names anytime with `curl localhost:9090/api/v1/label/__name__/values`).
 
 | Claude Code metric | Prometheus name (verified) | Key attributes |
 |---|---|---|
@@ -12,10 +12,10 @@ Names below are as they land in Prometheus after the collector's exporter (dots 
 | `claude_code.token.usage` | `claude_code_token_usage_tokens_total` | `type` (input/output/cacheRead/cacheCreation), `model`, `session_id` |
 | `claude_code.cost.usage` | `claude_code_cost_usage_USD_total` | `model`, `session_id` |
 | `claude_code.lines_of_code.count` | `claude_code_lines_of_code_count_total` | `type` (added/removed) |
-| `claude_code.commit.count` | `claude_code_commit_count_total` | — |
-| `claude_code.pull_request.count` | `claude_code_pull_request_count_total` | — |
+| `claude_code.commit.count` | `claude_code_commit_count_total` | n/a |
+| `claude_code.pull_request.count` | `claude_code_pull_request_count_total` | n/a |
 | `claude_code.code_edit_tool.decision` | `claude_code_code_edit_tool_decision_total` | `tool` (Edit/MultiEdit/Write/NotebookEdit), `decision` (accept/reject) |
-| (undocumented, observed) | `claude_code_active_time_seconds_total` | — |
+| (undocumented, observed) | `claude_code_active_time_seconds_total` | n/a |
 
 All covered on the **Token & Cost Usage** Grafana dashboard.
 
@@ -38,7 +38,7 @@ All standard attributes (`session.id`, `user.account_id`/`user.id`, `organizatio
 
 ## Cardinality / interval knobs (optional, not required to see data)
 
-These only affect volume/freshness, not what's captured — set them directly as env vars alongside what `agentobs connect` gives you if needed:
+These only affect volume/freshness, not what's captured. Set them directly as env vars alongside what `agentobs connect` gives you if needed:
 
 | Env var | Default | Effect |
 |---|---|---|

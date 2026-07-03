@@ -26,7 +26,7 @@ This merges (never replaces) `~/.gemini/settings.json`:
 
 | Gemini CLI metric | Attributes |
 |---|---|
-| `gemini_cli.session.count` | — |
+| `gemini_cli.session.count` | n/a |
 | `gemini_cli.tool.call.count` | `function_name`, `success`, `decision` |
 | `gemini_cli.tool.call.latency` | `function_name`, `decision` |
 | `gemini_cli.api.request.count` | `model`, `status_code`, `error_type` |
