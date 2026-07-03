@@ -57,6 +57,36 @@ func shellRcPath() string {
 	return filepath.Join(home, ".bashrc")
 }
 
+// writeShellRcBlock writes exportLines between a pair of markers scoped to
+// agentName, replacing any previous block for that agent instead of blindly
+// appending -- otherwise running `connect` twice (e.g. after toggling a
+// prompt like log_user_prompts) duplicates every export line each time.
+func writeShellRcBlock(rcPath, agentName string, exportLines []string) error {
+	begin := fmt.Sprintf("# BEGIN agentobs connect (%s)", agentName)
+	end := fmt.Sprintf("# END agentobs connect (%s)", agentName)
+	block := begin + "\n" + strings.Join(exportLines, "\n") + "\n" + end
+
+	existing, err := os.ReadFile(rcPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	var newContent string
+	if existing != nil && strings.Contains(string(existing), begin) {
+		start := strings.Index(string(existing), begin)
+		stop := strings.Index(string(existing), end)
+		if stop == -1 || stop < start {
+			return fmt.Errorf("found %q without matching %q in %s -- fix or remove that block by hand", begin, end, rcPath)
+		}
+		stop += len(end)
+		newContent = string(existing)[:start] + block + string(existing)[stop:]
+	} else {
+		newContent = string(existing) + "\n" + block + "\n"
+	}
+
+	return os.WriteFile(rcPath, []byte(newContent), 0o644)
+}
+
 func backupIfExists(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		return nil
@@ -234,12 +264,7 @@ func connectEnv(spec agents.AgentSpec, endpoint string, yamlConfig map[string]in
 	}
 
 	if shouldWrite {
-		f, err := os.OpenFile(rcPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if _, err := f.WriteString("\n# added by `agentobs connect`\n" + strings.Join(exportLines, "\n") + "\n"); err != nil {
+		if err := writeShellRcBlock(rcPath, spec.Name, exportLines); err != nil {
 			return err
 		}
 		fmt.Printf("Wrote env vars to %s. Restart your shell or `source %s`.\n", rcPath, rcPath)
