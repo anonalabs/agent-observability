@@ -1,0 +1,51 @@
+version: 2
+
+project_name: agentobs
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: agentobs
+    dir: cli
+    main: ./cmd/agentobs
+    binary: agentobs
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: agentobs
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: anonalabs
+    name: agent-observability
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
