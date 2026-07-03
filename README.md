@@ -1,6 +1,6 @@
 # agent-observability
 
-**Datadog for AI coding agents.** Open-source, self-hosted telemetry for Claude Code, Gemini CLI, and Cursor: token usage, cost, tool activity, sessions, and (for the first time across tools that were never designed to be compared) one dashboard that ranks them against each other.
+**Datadog for AI coding agents.** Open-source, self-hosted telemetry for Claude Code, Gemini CLI, Cursor, GitHub Copilot coding agent, Codex, and OpenCode: token usage, cost, tool activity, sessions, and (for the first time across tools that were never designed to be compared) one dashboard that ranks them against each other.
 
 Every agent, every session, every dollar spent, in your own Grafana, on your own infra, in about two minutes.
 
@@ -12,7 +12,7 @@ Claude Code and Gemini CLI ship native OpenTelemetry. Cursor doesn't. Every othe
 
 - **`agentobs`**: a single Go binary, installable via one `curl | sh` (prebuilt releases) or `go build` from source. Install the stack, wire up an agent, export data, check health. No Python venvs, no Node, no separate services to babysit.
 - **Any OTel-emitting tool works via config, not code.** Claude Code and Gemini CLI ship as declarative specs (`cli/internal/agents/builtin.yaml`); add your own tool the same way in `~/.config/agentobs/agents.yaml` -- `agentobs agents list` shows everything registered.
-- **Cursor supported despite having no native OTel**: a from-scratch Go reimplementation of its hook system, no reliance on an external package.
+- **Cursor, GitHub Copilot coding agent, Codex, and OpenCode supported despite none of them having native OTel**: a from-scratch Go hook-processing pipeline that normalizes each tool's own hook event vocabulary (camelCase for Cursor/Copilot, PascalCase for Codex/OpenCode) onto one shared span model, no reliance on any external package.
 - **Agent Leaderboard + Session Timeline dashboards**: the actual innovation, real cross-agent views built on `UNION` queries across ClickHouse's logs and traces tables, normalized on `ServiceName`/session id. Pick one session, see its full timeline regardless of which agent ran it. Nobody else treats "which agent" as a first-class dimension.
 - **Config merges, never overwrites.** `connect` always backs up (`.bak`) before touching `hooks.json`/`settings.json`/shell rc files, and merges rather than replaces, safe to run alongside other tools that already registered hooks.
 - **Privacy-first**: prompt/tool-detail logging is off by default across every agent, toggled explicitly per `connect` run.
@@ -24,7 +24,7 @@ Claude Code and Gemini CLI ship native OpenTelemetry. Cursor doesn't. Every othe
 curl -fsSL https://raw.githubusercontent.com/anonalabs/agent-observability/main/install.sh | sh
 
 agentobs install                    # brings up collector + prometheus + clickhouse + grafana
-agentobs connect --agent claude-code # or --agent cursor / --agent gemini-cli
+agentobs connect --agent claude-code # or cursor / gemini-cli / copilot / codex / opencode
 ```
 
 No Go toolchain needed -- that installs a prebuilt binary. Building from source instead:
@@ -38,6 +38,9 @@ Then:
 - **Claude Code**: source the printed `export` lines (or let `connect` append them to your shell rc), then use `claude` as normal.
 - **Gemini CLI**: nothing else to do, `connect` already merged `~/.gemini/settings.json`.
 - **Cursor**: restart the IDE to pick up the new hooks.
+- **GitHub Copilot coding agent**: repo-scoped only (writes `.github/hooks/otel-hooks.json`), nothing else to do.
+- **Codex**: nothing else to do, `connect` enables `codex_hooks` in `~/.codex/config.toml` for you.
+- **OpenCode**: restart OpenCode to load the new plugin (global by default; see `agentobs connect --help` for project scope).
 
 Open **http://localhost:3000** and watch the dashboards fill in as you work.
 
@@ -45,10 +48,11 @@ Open **http://localhost:3000** and watch the dashboards fill in as you work.
 
 ```
 Claude Code ─┐
-Gemini CLI  ─┼─▶ OpenTelemetry Collector ─▶ Prometheus (metrics)
-Cursor      ─┘                            ─▶ ClickHouse (logs + traces)
-                                                    │
-                                                    ▼
+Gemini CLI  ─┤
+Cursor      ─┼─▶ OpenTelemetry Collector ─▶ Prometheus (metrics)
+Copilot     ─┤                            ─▶ ClickHouse (logs + traces)
+Codex       ─┤                                     │
+OpenCode    ─┘                                     ▼
                                                  Grafana
 ```
 
@@ -62,6 +66,7 @@ Full design rationale, including how to add another agent, in [docs/architecture
 | [docs/metrics.md](docs/metrics.md) | Full Claude Code metric/event reference |
 | [docs/gemini-cli.md](docs/gemini-cli.md) | Gemini CLI telemetry reference |
 | [docs/cursor.md](docs/cursor.md) | Cursor hook shim reference |
+| [docs/other-agents.md](docs/other-agents.md) | GitHub Copilot coding agent, Codex, OpenCode, Antigravity |
 | [docs/architecture.md](docs/architecture.md) | System design + cloud export options |
 | [docs/security.md](docs/security.md) | Opt-in auth hardening (`agentobs install --secure`) |
 | [docs/alerting.md](docs/alerting.md) | Cost/rate-limit/tool-failure alert rules + webhook delivery |

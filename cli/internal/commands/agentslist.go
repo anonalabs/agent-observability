@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -33,11 +34,24 @@ func AgentsCmd() *cobra.Command {
 				fmt.Printf("%-16s %-12s %s\n", spec.Name, spec.Kind, detected)
 			}
 
-			cursorDetected := "no"
-			if (agents.CursorAgent{}).Detect() {
-				cursorDetected = "yes"
+			names := make([]string, 0, len(hookAgents()))
+			for name := range hookAgents() {
+				names = append(names, name)
 			}
-			fmt.Printf("%-16s %-12s %s\n", "cursor", "hook-shim", cursorDetected)
+			sort.Strings(names)
+			for _, name := range names {
+				detected := "no"
+				if detector, ok := hookAgents()[name].(interface{ Detect() bool }); ok && detector.Detect() {
+					detected = "yes"
+				}
+				fmt.Printf("%-16s %-12s %s\n", name, "hook-shim", detected)
+			}
+
+			openCodeDetected := "no"
+			if (agents.OpenCodeAgent{}).Detect() {
+				openCodeDetected = "yes"
+			}
+			fmt.Printf("%-16s %-12s %s\n", "opencode", "plugin", openCodeDetected)
 			return nil
 		},
 	}

@@ -38,6 +38,7 @@ var toolCompletionOrStartOperation = map[string]string{
 	"beforeMCPExecution": "tool", "afterMCPExecution": "tool", "beforeReadFile": "tool",
 	"afterFileEdit": "tool", "subagentStart": "chain", "subagentStop": "chain",
 	"sessionStart": "session", "sessionEnd": "session",
+	"permissionRequest": "tool", "errorOccurred": "chain",
 }
 
 var eventSpanKind = map[string]string{
@@ -45,6 +46,42 @@ var eventSpanKind = map[string]string{
 	"postToolUseFailure": "tool", "beforeShellExecution": "tool", "afterShellExecution": "tool",
 	"beforeMCPExecution": "tool", "afterMCPExecution": "tool", "beforeReadFile": "tool",
 	"afterFileEdit": "tool", "subagentStart": "chain", "subagentStop": "chain",
+	"permissionRequest": "tool", "errorOccurred": "chain",
+}
+
+// canonicalEvent maps each source agent's own hook event vocabulary onto ours
+// (Cursor's own camelCase names, since that's what event_attributes.go's
+// switch and the maps above are keyed on). Cursor's names pass through
+// unchanged; Codex's PascalCase names and any event name we don't recognize
+// pass through as-is too, so an unmapped event still gets a "chain"-kind,
+// "unknown"-operation span instead of being dropped.
+var canonicalEvent = map[string]string{
+	// Copilot coding agent
+	"userPromptSubmitted": "beforeSubmitPrompt",
+	// Codex, and shared with OpenCode's plugin (also emits PascalCase names)
+	"SessionStart":       "sessionStart",
+	"SessionEnd":         "sessionEnd",
+	"PreToolUse":         "preToolUse",
+	"PostToolUse":        "postToolUse",
+	"PostToolUseFailure": "postToolUseFailure",
+	"UserPromptSubmit":   "beforeSubmitPrompt",
+	"PermissionRequest":  "permissionRequest",
+	"AfterFileEdit":      "afterFileEdit",
+	"Stop":               "stop",
+}
+
+func normalizeEvent(raw string) string {
+	if canon, ok := canonicalEvent[raw]; ok {
+		return canon
+	}
+	return raw
+}
+
+// spanNamePrefix derives a short prefix like "cursor" or "copilot" from a
+// Config.ServiceName like "cursor-agent"/"copilot-agent" -- each agent's
+// wrapper config sets its own ServiceName, so this needs no separate field.
+func spanNamePrefix(serviceName string) string {
+	return strings.TrimSuffix(serviceName, "-agent")
 }
 
 func mapEventToOperation(event string) string {
@@ -61,9 +98,21 @@ func mapEventToSpanKind(event string) string {
 	return "chain"
 }
 
-// generateResponse returns the response Cursor expects for this hook event --
-// permission hooks must explicitly allow, others get an empty ack.
-func generateResponse(event string) map[string]interface{} {
+// generateResponse returns the response the calling hook runner expects on
+// stdout. Only verified against Cursor's actual hook protocol, where
+// pre-approval events (beforeShellExecution etc.) must explicitly return
+// {"permission":"allow"} or Cursor blocks the action. For every other agent
+// (Copilot, Codex, or anything else reusing this binary) we don't have the
+// real tool to test against, so this deliberately does NOT invent an ack
+// schema for their permission-shaped events (e.g. Codex's PermissionRequest,
+// canonicalized to "permissionRequest") -- returning the wrong shape could
+// silently block/confuse a runner we can't verify. Those get the same empty
+// ack as any other non-blocking event; if a given runner turns out to need
+// something else, that's a one-line addition here once it's actually tested.
+func generateResponse(agent, event string) map[string]interface{} {
+	if agent != "cursor" {
+		return map[string]interface{}{}
+	}
 	permissionEvents := map[string]bool{
 		"beforeShellExecution": true, "beforeMCPExecution": true,
 		"beforeReadFile": true, "beforeSubmitPrompt": true,
@@ -74,11 +123,17 @@ func generateResponse(event string) map[string]interface{} {
 	return map[string]interface{}{}
 }
 
-// ProcessHook builds and exports one span for a single Cursor hook event,
-// returning the JSON response Cursor expects on stdout.
+// ProcessHook builds and exports one span for a single hook event from any
+// supported agent's hook runner (Cursor, and any other hook-based agent
+// reusing this same binary via a different wrapper script/config -- e.g.
+// Copilot or Codex), returning the JSON response that runner expects on
+// stdout.
 func ProcessHook(cfg Config, data map[string]interface{}) (map[string]interface{}, error) {
-	hookEvent := stringOr(data, "hook_event_name", "unknown")
-	conversationID := stringOr(data, "conversation_id", "unknown")
+	rawEvent := stringOr(data, "hook_event_name", stringOr(data, "hook_event_type", "unknown"))
+	hookEvent := normalizeEvent(rawEvent)
+	// conversation_id is Cursor's name for the session key; session_id is
+	// Copilot's (and generically what most other hook-based runners use).
+	conversationID := stringOr(data, "conversation_id", stringOr(data, "session_id", "unknown"))
 	generationID := stringOr(data, "generation_id", "unknown")
 
 	ctxMgr, err := NewContextManager()
@@ -100,12 +155,13 @@ func ProcessHook(cfg Config, data map[string]interface{}) (map[string]interface{
 	}
 
 	startTime := time.Now()
+	agent := spanNamePrefix(cfg.ServiceName)
 
 	span := Span{
 		TraceID:      traceID,
 		SpanID:       spanID,
 		ParentSpanID: parentSpanID,
-		Name:         "cursor." + hookEvent,
+		Name:         agent + "." + hookEvent,
 		Kind:         tracepb.Span_SPAN_KIND_INTERNAL,
 		StartTime:    startTime,
 		Attributes:   map[string]interface{}{},
@@ -115,7 +171,7 @@ func ProcessHook(cfg Config, data map[string]interface{}) (map[string]interface{
 	addCommonAttributes(&span, data, hookEvent, conversationID, generationID, parentSpanID)
 	addEventSpecificAttributes(&span, cfg, hookEvent, data)
 
-	response := generateResponse(hookEvent)
+	response := generateResponse(agent, hookEvent)
 	if perm, ok := response["permission"]; ok {
 		span.Attributes["langsmith.metadata.permission"] = perm
 	}

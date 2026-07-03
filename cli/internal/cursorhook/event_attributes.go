@@ -1,6 +1,10 @@
 package cursorhook
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+)
 
 func jsonStr(v interface{}) string {
 	b, err := json.Marshal(v)
@@ -31,6 +35,16 @@ func addEventSpecificAttributes(span *Span, cfg Config, event string, raw map[st
 		}
 
 	case "preToolUse", "postToolUse", "postToolUseFailure":
+		if event == "postToolUseFailure" {
+			// Without this, a failed tool call span stays STATUS_CODE_OK
+			// (the zero value set in hook.go) and the tool-failure alert
+			// rule -- which filters on StatusCode='STATUS_CODE_ERROR' -- would
+			// never match a single real failure.
+			span.StatusCode = tracepb.Status_STATUS_CODE_ERROR
+			if v, ok := getString(data, "error"); ok {
+				span.StatusMessage = v
+			}
+		}
 		if toolName, ok := getString(data, "tool_name"); ok {
 			span.Attributes["gen_ai.tool.name"] = toolName
 		}
@@ -130,6 +144,27 @@ func addEventSpecificAttributes(span *Span, cfg Config, event string, raw map[st
 		}
 		if v, ok := data["subagent_task"]; ok {
 			span.Attributes["langsmith.metadata.subagent_task"] = v
+		}
+
+	case "errorOccurred":
+		span.StatusCode = tracepb.Status_STATUS_CODE_ERROR
+		if v, ok := getString(data, "error_message"); ok {
+			span.StatusMessage = v
+			span.Attributes["langsmith.metadata.error_message"] = v
+		} else if v, ok := getString(data, "message"); ok {
+			span.StatusMessage = v
+			span.Attributes["langsmith.metadata.error_message"] = v
+		}
+		if v, ok := getString(data, "error_type"); ok {
+			span.Attributes["langsmith.metadata.error_type"] = v
+		}
+
+	case "permissionRequest":
+		if v, ok := getString(data, "tool_name"); ok {
+			span.Attributes["gen_ai.tool.name"] = v
+		}
+		if v, ok := data["tool_input"]; ok {
+			span.Attributes["langsmith.metadata.tool_input"] = jsonStr(v)
 		}
 	}
 

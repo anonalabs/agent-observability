@@ -32,8 +32,25 @@ func loadRegistry(agentsFile string) (*agents.Registry, error) {
 	return agents.LoadRegistry(agentsFile)
 }
 
+// hookAgents are agents wired via a hooks.json + wrapper script + own
+// otel config (as opposed to the declarative env/json-merge AgentSpec
+// system): Cursor needs this because it has no native OTel export at all,
+// Copilot and Codex because their hook JSON schemas need array-merge logic
+// json-merge's flat key-path setter can't express.
+func hookAgents() map[string]agents.HookAgent {
+	return map[string]agents.HookAgent{
+		"cursor":  agents.CursorAgent{},
+		"copilot": agents.CopilotAgent{},
+		"codex":   agents.CodexAgent{},
+	}
+}
+
 func agentNames(reg *agents.Registry) []string {
-	return append(reg.Names(), "cursor")
+	names := reg.Names()
+	for name := range hookAgents() {
+		names = append(names, name)
+	}
+	return append(names, "opencode")
 }
 
 func detectAgent(reg *agents.Registry) string {
@@ -42,8 +59,13 @@ func detectAgent(reg *agents.Registry) string {
 			return spec.Name
 		}
 	}
-	if (agents.CursorAgent{}).Detect() {
-		return "cursor"
+	for name, agent := range hookAgents() {
+		if detector, ok := agent.(interface{ Detect() bool }); ok && detector.Detect() {
+			return name
+		}
+	}
+	if (agents.OpenCodeAgent{}).Detect() {
+		return "opencode"
 	}
 	return ""
 }
@@ -146,8 +168,11 @@ func ConnectCmd() *cobra.Command {
 				return err
 			}
 
-			if agentName == "cursor" {
-				return connectCursor(endpoint, yamlConfig, nonInteractive, authTokenFlag)
+			if hookAgent, ok := hookAgents()[agentName]; ok {
+				return connectHookAgent(hookAgent, endpoint, yamlConfig, nonInteractive, authTokenFlag)
+			}
+			if agentName == "opencode" {
+				return connectOpenCode(endpoint, yamlConfig, nonInteractive, authTokenFlag)
 			}
 
 			spec, ok := reg.Get(agentName)
@@ -351,15 +376,22 @@ func printNextSteps(activateHint, dashboard string) {
 	fmt.Println("(Data won't appear until you've actually used the agent for a bit -- give it 30-60s after your first prompt/tool call.)")
 }
 
-func connectCursor(endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, authToken string) error {
-	agent := agents.CursorAgent{}
+// hookAgentNextStep is what to tell the user to do after wiring up each
+// hook-based agent -- restarting is only needed for Cursor (a running IDE
+// process); Copilot/Codex just re-read hooks.json on their next invocation.
+var hookAgentNextStep = map[string]string{
+	"cursor":  "Restart Cursor IDE to pick up the new hooks",
+	"copilot": "Use the Copilot coding agent in this repo as normal",
+	"codex":   "Use Codex as normal",
+}
 
+func connectHookAgent(agent agents.HookAgent, endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, authToken string) error {
 	if _, err := exec.LookPath("agentobs"); err != nil {
 		exe, _ := os.Executable()
 		fmt.Printf(
-			"Warning: `agentobs` isn't on PATH -- Cursor's hook wrapper script execs it by name and will fail.\n"+
+			"Warning: `agentobs` isn't on PATH -- %s's hook wrapper script execs it by name and will fail.\n"+
 				"Fix: run `go install ./cli/cmd/agentobs` (adds to $GOPATH/bin), or add %s's directory to your PATH.\n",
-			exe,
+			agent.Name(), exe,
 		)
 	}
 
@@ -436,7 +468,89 @@ func connectCursor(endpoint string, yamlConfig map[string]interface{}, nonIntera
 	}
 
 	fmt.Printf("Wrote %s, %s, and %s (merged, not replaced).\n", configPath, wrapperPath, hooksJSONPath)
-	printNextSteps("Restart Cursor IDE to pick up the new hooks", "Cursor Traces")
+
+	if codex, ok := agent.(agents.CodexAgent); ok {
+		tomlPath, err := codex.TOMLConfigPath()
+		if err != nil {
+			return err
+		}
+		if err := agents.EnableHooksFeature(tomlPath); err != nil {
+			return err
+		}
+		fmt.Printf("Enabled codex_hooks in %s.\n", tomlPath)
+	}
+
+	dashboard := "Agent Leaderboard (unified)"
+	if agent.Name() == "cursor" {
+		dashboard = "Cursor Traces"
+	}
+	printNextSteps(hookAgentNextStep[agent.Name()], dashboard)
+	return nil
+}
+
+// connectOpenCode wires OpenCode's plugin system. It doesn't fit the
+// HookAgent interface -- there's no hooks.json to merge into, the plugin
+// file itself (dropped into OpenCode's plugins directory) is the whole
+// registration -- so it's its own small path, same shape as connectHookAgent
+// otherwise (own config.json, backup-before-overwrite, same next-steps).
+func connectOpenCode(endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, authToken string) error {
+	agent := agents.OpenCodeAgent{}
+
+	if _, err := exec.LookPath("agentobs"); err != nil {
+		exe, _ := os.Executable()
+		fmt.Printf(
+			"Warning: `agentobs` isn't on PATH -- OpenCode's plugin execs it by name and will fail.\n"+
+				"Fix: run `go install ./cli/cmd/agentobs` (adds to $GOPATH/bin), or add %s's directory to your PATH.\n",
+			exe,
+		)
+	}
+
+	maskPrompts, err := config.Resolve("connect.mask_prompts", (*bool)(nil), yamlConfig, func() (bool, error) {
+		var v bool
+		err := survey.AskOne(&survey.Confirm{Message: "Mask prompts/file paths/emails? (privacy)", Default: false}, &v)
+		return v, err
+	}, nonInteractive, boolPtr(false))
+	if err != nil {
+		return err
+	}
+
+	pluginDir, err := agent.PluginDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		return err
+	}
+
+	configPath, err := agent.ConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := backupIfExists(configPath); err != nil {
+		return err
+	}
+	cfgOut, err := json.MarshalIndent(agent.OtelConfig(endpoint, maskPrompts, authToken), "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(configPath, cfgOut, 0o644); err != nil {
+		return err
+	}
+
+	pluginPath, err := agent.PluginPath()
+	if err != nil {
+		return err
+	}
+	if err := backupIfExists(pluginPath); err != nil {
+		return err
+	}
+	if err := os.WriteFile(pluginPath, []byte(agent.PluginContent(configPath)), 0o644); err != nil {
+		return err
+	}
+
+	fmt.Printf("Wrote %s and %s.\n", configPath, pluginPath)
+	fmt.Println("(Global scope. For project scope instead, move both files into .opencode/plugins/ in this repo.)")
+	printNextSteps("Restart OpenCode to load the new plugin", "Agent Leaderboard (unified)")
 	return nil
 }
 
