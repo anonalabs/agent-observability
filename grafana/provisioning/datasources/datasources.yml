@@ -14,6 +14,8 @@ datasources:
     access: proxy
     jsonData:
       host: clickhouse
-      port: 9000
-      protocol: native
+      port: 8123
+      protocol: http
       defaultDatabase: otel
+      dialTimeout: "10"
+      queryTimeout: "60"

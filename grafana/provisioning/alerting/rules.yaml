@@ -27,18 +27,18 @@ groups:
                 conditions:
                     - evaluator:
                         params:
-                            - 5
+                            - 1
                         type: gt
                 expression: A
                 refId: C
                 type: threshold
-          noDataState: NoData
+          noDataState: OK
           execErrState: Error
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: Claude Code cost increased by more than $5 in the last hour.
+            summary: Claude Code cost increased by more than $1 in the last hour.
         - uid: agentobs-rate-limit-spike
           title: Claude Code hitting API rate limits (429s)
           condition: C
@@ -61,18 +61,18 @@ groups:
                 conditions:
                     - evaluator:
                         params:
-                            - 0
+                            - 1
                         type: gt
                 expression: A
                 refId: C
                 type: threshold
-          noDataState: NoData
+          noDataState: OK
           execErrState: Error
           for: 1m
           labels:
             severity: warning
           annotations:
-            summary: Claude Code hit more than 0 API rate-limit (429) errors in the last 5 minutes.
+            summary: Claude Code hit more than 1 API rate-limit (429) errors in the last 5 minutes.
         - uid: agentobs-tool-failure-spike
           title: Claude Code tool call failures
           condition: C
@@ -95,15 +95,15 @@ groups:
                 conditions:
                     - evaluator:
                         params:
-                            - 3
+                            - 1
                         type: gt
                 expression: A
                 refId: C
                 type: threshold
-          noDataState: NoData
+          noDataState: OK
           execErrState: Error
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: More than 3 tool calls failed in the last 15 minutes.
+            summary: More than 1 tool calls failed in the last 15 minutes.
