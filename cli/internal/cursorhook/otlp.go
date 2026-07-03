@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
@@ -121,9 +122,14 @@ func exportGRPC(cfg Config, req *collectortracepb.ExportTraceServiceRequest) err
 		creds = credentials.NewTLS(nil)
 	}
 
-	conn, err := grpc.NewClient(cfg.Endpoint, grpc.WithTransportCredentials(creds))
+	// grpc.NewClient wants a bare host:port target, not a URL -- the default
+	// endpoint everywhere else in this project is "http://host:port" (Claude
+	// Code and Gemini CLI parse that themselves), so strip the scheme here.
+	target := strings.TrimPrefix(strings.TrimPrefix(cfg.Endpoint, "https://"), "http://")
+
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(creds))
 	if err != nil {
-		return fmt.Errorf("dialing %s: %w", cfg.Endpoint, err)
+		return fmt.Errorf("dialing %s: %w", target, err)
 	}
 	defer conn.Close()
 

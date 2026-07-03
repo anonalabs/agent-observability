@@ -133,8 +133,10 @@ func ConnectCmd() *cobra.Command {
 			switch spec.Kind {
 			case "json-merge":
 				return connectJSONMerge(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers)
-			default:
+			case "env":
 				return connectEnv(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers, flagOrNil(cmd, "write-shell-rc", writeShellRcFlag))
+			default:
+				return fmt.Errorf("agent %q has unknown kind %q (expected \"env\" or \"json-merge\")", spec.Name, spec.Kind)
 			}
 		},
 	}
@@ -206,7 +208,15 @@ func connectEnv(spec agents.AgentSpec, endpoint string, yamlConfig map[string]in
 	envVars := spec.ResolveEnvVars(endpoint, answers)
 	var exportLines []string
 	for _, ev := range envVars {
-		exportLines = append(exportLines, fmt.Sprintf("export %s=\"%s\"", ev.Key, ev.Value))
+		// Values can come from an untrusted YAML config (--config, or a
+		// downloaded agents.yaml via --agents-file), so they're single-quote
+		// escaped rather than interpolated into a double-quoted string --
+		// double quotes still allow $(...) / `...` command substitution,
+		// which would execute when this gets written to a shell rc file.
+		if !isShellSafeIdentifier(ev.Key) {
+			return fmt.Errorf("invalid env var name %q from agent spec %q", ev.Key, spec.Name)
+		}
+		exportLines = append(exportLines, fmt.Sprintf("export %s=%s", ev.Key, shellQuote(ev.Value)))
 	}
 
 	rcPath := shellRcPath()
@@ -284,7 +294,7 @@ func connectJSONMerge(spec agents.AgentSpec, endpoint string, yamlConfig map[str
 
 	fmt.Printf("Wrote %s (merged, not replaced).\n", targetPath)
 	if !specSetsEndpoint(spec) {
-		fmt.Printf("Also export: export OTEL_EXPORTER_OTLP_ENDPOINT=\"%s\"\n", endpoint)
+		fmt.Printf("Also export: export OTEL_EXPORTER_OTLP_ENDPOINT=%s\n", shellQuote(endpoint))
 		fmt.Println("(only needed if the collector isn't at this agent's default endpoint)")
 	}
 	printNextSteps(fmt.Sprintf("Use %s as normal", spec.Name), "Token & Cost Usage")
@@ -398,3 +408,27 @@ func connectCursor(endpoint string, yamlConfig map[string]interface{}, nonIntera
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func isShellSafeIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, c := range s {
+		isLetter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+		isDigit := c >= '0' && c <= '9'
+		if i == 0 && !isLetter {
+			return false
+		}
+		if !isLetter && !isDigit {
+			return false
+		}
+	}
+	return true
+}
+
+// shellQuote wraps a value in single quotes for safe embedding in a POSIX
+// shell script -- single quotes disable all expansion (including $(...) and
+// backticks), unlike the double quotes used previously.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}

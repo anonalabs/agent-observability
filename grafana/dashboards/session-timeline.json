@@ -34,7 +34,7 @@
       "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
       "targets": [
         {
-          "rawSql": "SELECT Timestamp, ServiceName AS agent, LogAttributes['event.name'] AS event, concat(LogAttributes['model'], LogAttributes['name'], LogAttributes['tool_name']) AS detail FROM otel.otel_logs WHERE LogAttributes['session.id'] = '$session_id' UNION ALL SELECT Timestamp, ServiceName AS agent, SpanName AS event, SpanAttributes['gen_ai.tool.name'] AS detail FROM otel.otel_traces WHERE SpanAttributes['langsmith.trace.session_id'] = '$session_id' ORDER BY Timestamp",
+          "rawSql": "SELECT Timestamp, ServiceName AS agent, LogAttributes['event.name'] AS event, concat(LogAttributes['model'], LogAttributes['name'], LogAttributes['tool_name']) AS detail FROM otel.otel_logs WHERE LogAttributes['session.id'] = ${session_id:singlequote} UNION ALL SELECT Timestamp, ServiceName AS agent, SpanName AS event, SpanAttributes['gen_ai.tool.name'] AS detail FROM otel.otel_traces WHERE SpanAttributes['langsmith.trace.session_id'] = ${session_id:singlequote} ORDER BY Timestamp",
           "format": 1
         }
       ]

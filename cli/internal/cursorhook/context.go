@@ -3,6 +3,7 @@ package cursorhook
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -55,12 +56,24 @@ func NewContextManager() (*ContextManager, error) {
 	return &ContextManager{StorageDir: dir}, nil
 }
 
+// safeFilenameComponent hashes an externally-supplied ID (generation_id /
+// conversation_id come straight from Cursor's hook JSON on stdin) before
+// it's used in a file path. filepath.Join does not stop ".." segments from
+// escaping StorageDir, so using the raw ID directly would let a crafted
+// generation_id like "../../../../etc/cron.d/x" write outside the intended
+// temp directory. Hashing makes the result a fixed-format, traversal-proof
+// filename regardless of what the ID contains.
+func safeFilenameComponent(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("%x", sum)
+}
+
 func (c *ContextManager) contextFile(generationID string) string {
-	return filepath.Join(c.StorageDir, generationID+"_context.json")
+	return filepath.Join(c.StorageDir, safeFilenameComponent(generationID)+"_context.json")
 }
 
 func (c *ContextManager) conversationFile(conversationID string) string {
-	return filepath.Join(c.StorageDir, "conversation_"+conversationID+".json")
+	return filepath.Join(c.StorageDir, "conversation_"+safeFilenameComponent(conversationID)+".json")
 }
 
 func readLocked(path string, out interface{}) (bool, error) {
