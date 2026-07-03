@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"net"
+	"os"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -34,6 +35,7 @@ func InstallCmd() *cobra.Command {
 	var composeFile string
 	var detach bool
 	var nonInteractive bool
+	var secure bool
 
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -69,8 +71,25 @@ func InstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Starting stack via %s ...\n", resolved)
-			if err := compose.Up(resolved, detach); err != nil {
+			composeFiles := []string{resolved}
+
+			if secure {
+				overlay, err := compose.SecureOverlayFile(resolved)
+				if err != nil {
+					return err
+				}
+				composeFiles = append(composeFiles, overlay)
+				if os.Getenv("AGENTOBS_AUTH_TOKEN") == "" || os.Getenv("GRAFANA_ADMIN_PASSWORD") == "" {
+					return fmt.Errorf(
+						"--secure requires AGENTOBS_AUTH_TOKEN and GRAFANA_ADMIN_PASSWORD to be set in the environment; " +
+							"see docs/security.md",
+					)
+				}
+				fmt.Println("Secure mode: anonymous Grafana access disabled, OTLP ingest requires a bearer token.")
+			}
+
+			fmt.Printf("Starting stack via %v ...\n", composeFiles)
+			if err := compose.Up(composeFiles, detach); err != nil {
 				return err
 			}
 
@@ -78,7 +97,11 @@ func InstallCmd() *cobra.Command {
 			fmt.Println("Grafana:    http://localhost:3000")
 			fmt.Println("Prometheus: http://localhost:9090")
 			fmt.Println()
-			fmt.Println("Next: run `agentobs connect` to wire up an agent's telemetry.")
+			if secure {
+				fmt.Println("Next: run `agentobs connect --auth-token \"$AGENTOBS_AUTH_TOKEN\"` to wire up an agent's telemetry.")
+			} else {
+				fmt.Println("Next: run `agentobs connect` to wire up an agent's telemetry.")
+			}
 			return nil
 		},
 	}
@@ -87,6 +110,7 @@ func InstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&detach, "detach", true, "")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "")
 	cmd.Flags().BoolVar(&nonInteractive, "yes", false, "")
+	cmd.Flags().BoolVar(&secure, "secure", false, "require auth (Grafana login, collector bearer token); needs AGENTOBS_AUTH_TOKEN + GRAFANA_ADMIN_PASSWORD env vars")
 
 	return cmd
 }

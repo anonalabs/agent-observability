@@ -1,0 +1,26 @@
+# Opt-in hardening overlay -- does not change default behavior of
+# docker-compose.yml on its own. Use with:
+#   agentobs install --secure
+# or manually:
+#   AGENTOBS_AUTH_TOKEN=... GRAFANA_ADMIN_PASSWORD=... \
+#     docker compose -f docker-compose.yml -f docker-compose.secure.yml up -d
+#
+# What changes:
+#   - Grafana: anonymous Admin access disabled, requires GRAFANA_ADMIN_PASSWORD.
+#   - Collector: OTLP ingest requires "Authorization: Bearer $AGENTOBS_AUTH_TOKEN".
+#     Point agents at it with `agentobs connect --auth-token "$AGENTOBS_AUTH_TOKEN"`.
+#
+# Both env vars are required (no defaults) -- compose fails to start rather
+# than silently falling back to something insecure.
+services:
+  otel-collector:
+    volumes:
+      - ./collector/otel-collector-config.secure.yaml:/etc/otel-collector-config.yaml
+    environment:
+      - AGENTOBS_AUTH_TOKEN=${AGENTOBS_AUTH_TOKEN:?set AGENTOBS_AUTH_TOKEN to a long random token}
+
+  grafana:
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}

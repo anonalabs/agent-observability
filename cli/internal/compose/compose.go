@@ -50,8 +50,15 @@ func ResolveComposeFile(explicit string) (string, error) {
 	return DefaultComposeFile()
 }
 
-func Run(composeFile string, args ...string) error {
-	fullArgs := append([]string{"compose", "-f", composeFile}, args...)
+// Run invokes `docker compose` against one or more compose files (later
+// files layer as overlays, e.g. a base file plus a security-hardening
+// override), same semantics as `docker compose -f a.yml -f b.yml ...`.
+func Run(composeFiles []string, args ...string) error {
+	fullArgs := []string{"compose"}
+	for _, f := range composeFiles {
+		fullArgs = append(fullArgs, "-f", f)
+	}
+	fullArgs = append(fullArgs, args...)
 	cmd := exec.Command("docker", fullArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -59,12 +66,22 @@ func Run(composeFile string, args ...string) error {
 	return cmd.Run()
 }
 
-func Up(composeFile string, detach bool) error {
+func Up(composeFiles []string, detach bool) error {
 	args := []string{"up"}
 	if detach {
 		args = append(args, "-d")
 	}
-	return Run(composeFile, args...)
+	return Run(composeFiles, args...)
+}
+
+// SecureOverlayFile locates docker-compose.secure.yml next to the resolved
+// base compose file.
+func SecureOverlayFile(baseComposeFile string) (string, error) {
+	overlay := filepath.Join(filepath.Dir(baseComposeFile), "docker-compose.secure.yml")
+	if _, err := os.Stat(overlay); err != nil {
+		return "", fmt.Errorf("docker-compose.secure.yml not found next to %s: %w", baseComposeFile, err)
+	}
+	return overlay, nil
 }
 
 func DockerAvailable() bool {

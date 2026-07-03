@@ -69,7 +69,7 @@ func backupIfExists(path string) error {
 }
 
 func ConnectCmd() *cobra.Command {
-	var agentFlag, endpointFlag, configFlag, agentsFileFlag string
+	var agentFlag, endpointFlag, configFlag, agentsFileFlag, authTokenFlag string
 	var writeShellRcFlag, logUserPromptsFlag, logToolDetailsFlag *bool
 	var nonInteractive bool
 
@@ -117,7 +117,7 @@ func ConnectCmd() *cobra.Command {
 			}
 
 			if agentName == "cursor" {
-				return connectCursor(endpoint, yamlConfig, nonInteractive)
+				return connectCursor(endpoint, yamlConfig, nonInteractive, authTokenFlag)
 			}
 
 			spec, ok := reg.Get(agentName)
@@ -132,9 +132,9 @@ func ConnectCmd() *cobra.Command {
 
 			switch spec.Kind {
 			case "json-merge":
-				return connectJSONMerge(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers)
+				return connectJSONMerge(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers, authTokenFlag)
 			case "env":
-				return connectEnv(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers, flagOrNil(cmd, "write-shell-rc", writeShellRcFlag))
+				return connectEnv(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers, flagOrNil(cmd, "write-shell-rc", writeShellRcFlag), authTokenFlag)
 			default:
 				return fmt.Errorf("agent %q has unknown kind %q (expected \"env\" or \"json-merge\")", spec.Name, spec.Kind)
 			}
@@ -145,6 +145,7 @@ func ConnectCmd() *cobra.Command {
 	cmd.Flags().StringVar(&endpointFlag, "endpoint", "", "")
 	cmd.Flags().StringVar(&configFlag, "config", "", "agentobs.yaml path")
 	cmd.Flags().StringVar(&agentsFileFlag, "agents-file", "", "extra agent specs (default: ~/.config/agentobs/agents.yaml)")
+	cmd.Flags().StringVar(&authTokenFlag, "auth-token", "", "bearer token for a collector running in --secure mode")
 	writeShellRcFlag = cmd.Flags().Bool("write-shell-rc", false, "")
 	logUserPromptsFlag = cmd.Flags().Bool("log-user-prompts", false, "capture full prompt text (privacy-sensitive, claude-code only)")
 	logToolDetailsFlag = cmd.Flags().Bool("log-tool-details", false, "capture bash commands and file paths (privacy-sensitive, claude-code only)")
@@ -190,7 +191,7 @@ func promptAgent(reg *agents.Registry) (string, error) {
 // connectEnv handles any "env"-kind spec (Claude Code, and any future
 // env-based agent added via agents.yaml): resolve its prompts, build the
 // ordered env vars, then either write them to the shell rc or print them.
-func connectEnv(spec agents.AgentSpec, endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, flagAnswers map[string]*bool, writeShellRcFlag *bool) error {
+func connectEnv(spec agents.AgentSpec, endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, flagAnswers map[string]*bool, writeShellRcFlag *bool, authToken string) error {
 	answers := map[string]bool{}
 	for _, p := range spec.Prompts {
 		def := p.Default
@@ -206,6 +207,9 @@ func connectEnv(spec agents.AgentSpec, endpoint string, yamlConfig map[string]in
 	}
 
 	envVars := spec.ResolveEnvVars(endpoint, answers)
+	if authToken != "" {
+		envVars = append(envVars, agents.EnvVar{Key: "OTEL_EXPORTER_OTLP_HEADERS", Value: "Authorization=Bearer " + authToken})
+	}
 	var exportLines []string
 	for _, ev := range envVars {
 		// Values can come from an untrusted YAML config (--config, or a
@@ -253,7 +257,7 @@ func connectEnv(spec agents.AgentSpec, endpoint string, yamlConfig map[string]in
 // connectJSONMerge handles any "json-merge"-kind spec (Gemini CLI, and any
 // future settings.json-style agent): resolve its prompts, merge the spec's
 // keys into whatever's already at the target path, backing up first.
-func connectJSONMerge(spec agents.AgentSpec, endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, flagAnswers map[string]*bool) error {
+func connectJSONMerge(spec agents.AgentSpec, endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, flagAnswers map[string]*bool, authToken string) error {
 	answers := map[string]bool{}
 	for _, p := range spec.Prompts {
 		def := p.Default
@@ -297,6 +301,10 @@ func connectJSONMerge(spec agents.AgentSpec, endpoint string, yamlConfig map[str
 		fmt.Printf("Also export: export OTEL_EXPORTER_OTLP_ENDPOINT=%s\n", shellQuote(endpoint))
 		fmt.Println("(only needed if the collector isn't at this agent's default endpoint)")
 	}
+	if authToken != "" {
+		fmt.Printf("Also export: export OTEL_EXPORTER_OTLP_HEADERS=%s\n", shellQuote("Authorization=Bearer "+authToken))
+		fmt.Println("(only if this agent reads that env var for auth headers; not all json-merge agents do)")
+	}
 	printNextSteps(fmt.Sprintf("Use %s as normal", spec.Name), "Token & Cost Usage")
 	return nil
 }
@@ -318,7 +326,7 @@ func printNextSteps(activateHint, dashboard string) {
 	fmt.Println("(Data won't appear until you've actually used the agent for a bit -- give it 30-60s after your first prompt/tool call.)")
 }
 
-func connectCursor(endpoint string, yamlConfig map[string]interface{}, nonInteractive bool) error {
+func connectCursor(endpoint string, yamlConfig map[string]interface{}, nonInteractive bool, authToken string) error {
 	agent := agents.CursorAgent{}
 
 	if _, err := exec.LookPath("agentobs"); err != nil {
@@ -354,7 +362,7 @@ func connectCursor(endpoint string, yamlConfig map[string]interface{}, nonIntera
 	if err := backupIfExists(configPath); err != nil {
 		return err
 	}
-	cfgOut, err := json.MarshalIndent(agent.OtelConfig(endpoint, maskPrompts), "", "  ")
+	cfgOut, err := json.MarshalIndent(agent.OtelConfig(endpoint, maskPrompts, authToken), "", "  ")
 	if err != nil {
 		return err
 	}

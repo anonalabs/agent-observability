@@ -1,0 +1,59 @@
+# Opt-in hardened variant of otel-collector-config.yaml: requires a bearer
+# token on every OTLP request. Used together with docker-compose.secure.yml
+# (which sets AGENTOBS_AUTH_TOKEN) via:
+#   agentobs install --secure
+# or manually:
+#   AGENTOBS_AUTH_TOKEN=... GRAFANA_ADMIN_PASSWORD=... \
+#     docker compose -f docker-compose.yml -f docker-compose.secure.yml up -d
+extensions:
+  bearertokenauth:
+    scheme: "Bearer"
+    token: "${env:AGENTOBS_AUTH_TOKEN}"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        auth:
+          authenticator: bearertokenauth
+      http:
+        endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: bearertokenauth
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    ttl: 2160h # 90 days
+    create_schema: true
+
+  debug:
+    verbosity: basic
+
+service:
+  extensions: [bearertokenauth]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, debug]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, debug]

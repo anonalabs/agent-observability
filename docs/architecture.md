@@ -37,9 +37,8 @@ No changes to the collector, storage, or dashboard architecture are needed to on
 
 ## Deferred (not in this MVP)
 
-- Auth / multi-tenancy on ingestion
+- Multi-tenancy on ingestion (auth itself is available opt-in, see [docs/security.md](security.md))
 - Hosted/cloud deployment (this repo targets Docker Compose self-hosting)
-- Alerting rules
 - A gateway/API layer in front of the collector
 - Lines-of-code correlation beyond what Claude Code's own metric reports (would require git diff correlation, which Claude Code's native telemetry doesn't do)
 

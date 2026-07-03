@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 
 	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -136,6 +137,11 @@ func exportGRPC(cfg Config, req *collectortracepb.ExportTraceServiceRequest) err
 	client := collectortracepb.NewTraceServiceClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Timeout)*time.Second)
 	defer cancel()
+
+	if len(cfg.Headers) > 0 {
+		md := metadata.New(cfg.Headers)
+		ctx = metadata.NewOutgoingContext(ctx, md)
+	}
 
 	_, err = client.Export(ctx, req)
 	if err != nil {

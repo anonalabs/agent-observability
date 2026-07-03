@@ -70,13 +70,17 @@ func (CursorAgent) HooksJSONPath() (string, error) {
 	return filepath.Join(home, ".cursor", "hooks.json"), nil
 }
 
-func (CursorAgent) OtelConfig(endpoint string, maskPrompts bool) map[string]interface{} {
+func (CursorAgent) OtelConfig(endpoint string, maskPrompts bool, authToken string) map[string]interface{} {
+	var headers interface{}
+	if authToken != "" {
+		headers = "Authorization=Bearer " + authToken
+	}
 	return map[string]interface{}{
 		"OTEL_EXPORTER_OTLP_ENDPOINT": endpoint,
 		"OTEL_SERVICE_NAME":           "cursor-agent",
 		"OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
 		"OTEL_EXPORTER_OTLP_INSECURE": "true",
-		"OTEL_EXPORTER_OTLP_HEADERS":  nil,
+		"OTEL_EXPORTER_OTLP_HEADERS":  headers,
 		"CURSOR_OTEL_MASK_PROMPTS":    boolStr(maskPrompts),
 		"OTEL_EXPORTER_OTLP_TIMEOUT":  "30",
 	}

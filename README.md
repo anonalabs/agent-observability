@@ -63,6 +63,7 @@ Full design rationale, including how to add another agent, in [docs/architecture
 | [docs/gemini-cli.md](docs/gemini-cli.md) | Gemini CLI telemetry reference |
 | [docs/cursor.md](docs/cursor.md) | Cursor hook shim reference |
 | [docs/architecture.md](docs/architecture.md) | System design + cloud export options |
+| [docs/security.md](docs/security.md) | Opt-in auth hardening (`agentobs install --secure`) |
 | [cli/README.md](cli/README.md) | `agentobs` CLI internals |
 
 ## Contributing
