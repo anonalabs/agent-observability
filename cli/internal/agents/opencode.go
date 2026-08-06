@@ -76,7 +76,7 @@ func (OpenCodeAgent) PluginContent(configPath string) string {
 // and exports an OTel span per event -- same processing path as the
 // Cursor/Copilot/Codex hook integrations, just a different trigger
 // mechanism (OpenCode has no hooks.json, plugins are the registration).
-export const AgentobsOtelHook: Plugin = async ({ $ }) => {
+export const AgentobsOtelHook: Plugin = async ({ $, directory }) => {
   try {
     await $`+"`which agentobs`"+`.quiet()
   } catch {
@@ -84,9 +84,15 @@ export const AgentobsOtelHook: Plugin = async ({ $ }) => {
     return {}
   }
 
+  // "directory" is PluginInput's project root -- OpenCode's equivalent of
+  // Cursor's own workspace_roots hook field. Stamping it on every payload
+  // (rather than only the prompt event) matches addCommonAttributes'
+  // behavior for Cursor, so the AnonaMemory connector's CWD-based allowlist
+  // (Credentials.AllowsPath) actually sees a working directory for OpenCode
+  // instead of dropping every turn.
   async function invoke(payload: Record<string, unknown>): Promise<void> {
     try {
-      await $`+"`agentobs cursor-hook --config %q`"+`.stdin(JSON.stringify(payload)).quiet().nothrow()
+      await $`+"`agentobs cursor-hook --config %q`"+`.stdin(JSON.stringify({ workspace_roots: [directory], ...payload })).quiet().nothrow()
     } catch {
       // Hook failures must never block the agent.
     }
