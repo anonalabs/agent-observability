@@ -2,6 +2,8 @@ package memory
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -174,9 +176,36 @@ func chooseProjects(cwd string) ([]string, error) {
 		return nil, err
 	}
 
+	return absolutizeProjects(raw)
+}
+
+// absolutizeProjects turns the comma-separated raw input into absolute
+// directory paths. It's split out from chooseProjects so this parsing --
+// the part that actually matters for correctness -- can be unit tested
+// without stubbing survey's interactive prompt.
+//
+// AllowsPath does a component-wise comparison against absolute paths stored
+// in memory.json, so anything relative here would silently match nothing --
+// deny-by-default fails closed, but the symptom is a baffling "0 turns
+// pushed" with no indication why. ExpandHome only resolves a leading "~/";
+// a bare "~" needs its own case before filepath.Abs, which would otherwise
+// leave it as a literal "~" directory relative to cwd.
+func absolutizeProjects(raw string) ([]string, error) {
 	var projects []string
 	for _, part := range splitAndTrim(raw) {
-		projects = append(projects, ExpandHome(part))
+		expanded := ExpandHome(part)
+		if expanded == "~" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("resolving ~: %w", err)
+			}
+			expanded = home
+		}
+		abs, err := filepath.Abs(expanded)
+		if err != nil {
+			return nil, fmt.Errorf("resolving %q: %w", part, err)
+		}
+		projects = append(projects, abs)
 	}
 	if len(projects) == 0 {
 		return nil, fmt.Errorf("at least one project directory is required")
