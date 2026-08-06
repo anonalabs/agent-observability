@@ -109,7 +109,7 @@ func memorySyncCmd() *cobra.Command {
 				if result.SkippedRows > 0 {
 					fmt.Printf("ClickHouse returned %d rows that could not be read (bad timestamp or cost) -- those turns' data isn't lost, just missing from this sync.\n", result.SkippedRows)
 				}
-				if result.EnrichErr != nil {
+				if result.EnrichErr != nil && result.Pushed > 0 {
 					verb := "went out"
 					if dryRun {
 						verb = "would go out"
@@ -170,6 +170,11 @@ func memoryStatusCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("%-16s %d\n", "pending turns", result.Pushed)
+
+			if result.EnrichErr != nil {
+				fmt.Println()
+				fmt.Println("ClickHouse is unreachable for cost/token enrichment -- the pending count above is accurate, but synced turns would go out without cost/tool context.")
+			}
 
 			if result.PromptOnlyErr != nil {
 				fmt.Println()
