@@ -15,8 +15,8 @@ func TestPromptOnlyTurnsExcludesClaudeCodeAndMaskedPrompts(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		gotQuery = string(body)
 		io.WriteString(w, strings.Join([]string{
-			`{"ts":"2026-08-06 12:00:00.000000000","agent":"cursor-agent","prompt":"refactor this","session":"sess-9","model":"claude-opus-5","cwd":"/home/dev/repo"}`,
-			`{"ts":"2026-08-06 12:05:00.000000000","agent":"gemini-cli","prompt":"explain","session":"sess-10","model":"","cwd":""}`,
+			`{"ts":"2026-08-06 12:00:00.000000000","agent":"cursor-agent","prompt":"refactor this","session":"sess-9","model":"claude-opus-5","workspace_roots":"[\"/home/dev/repo\"]"}`,
+			`{"ts":"2026-08-06 12:05:00.000000000","agent":"windsurf-agent","prompt":"explain","session":"sess-10","model":""}`,
 		}, "\n"))
 	}))
 	defer srv.Close()
@@ -36,6 +36,12 @@ func TestPromptOnlyTurnsExcludesClaudeCodeAndMaskedPrompts(t *testing.T) {
 	if !strings.Contains(gotQuery, "[MASKED]") {
 		t.Error("query must exclude prompts the hook shim already masked")
 	}
+	if !strings.Contains(gotQuery, "otel_traces") {
+		t.Error("query must read from otel_traces, the hook-shim agents' table")
+	}
+	if strings.Contains(gotQuery, "otel_logs") {
+		t.Error("query must not read from otel_logs: its rows carry no directory attribute and can never pass the allowlist")
+	}
 
 	if len(turns) != 2 {
 		t.Fatalf("got %d turns, want 2", len(turns))
@@ -51,6 +57,29 @@ func TestPromptOnlyTurnsExcludesClaudeCodeAndMaskedPrompts(t *testing.T) {
 	}
 	if turns[0].TurnID == "" || turns[0].TurnID == turns[1].TurnID {
 		t.Errorf("turn ids must be present and distinct: %q, %q", turns[0].TurnID, turns[1].TurnID)
+	}
+	if turns[1].CWD != "" {
+		t.Errorf("turn 1 cwd = %q, want empty: its span carries no workspace_roots", turns[1].CWD)
+	}
+}
+
+func TestPromptOnlyTurnsCWDTakesFirstWorkspaceRoot(t *testing.T) {
+	row := `{"ts":"2026-08-06 12:00:00.000000000","agent":"cursor-agent","prompt":"refactor this","session":"sess-9","model":"","workspace_roots":"[\"/home/dev/repo\",\"/home/dev/other\"]"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, row)
+	}))
+	defer srv.Close()
+
+	ch := ClickHouse{BaseURL: srv.URL, HTTP: srv.Client()}
+	turns, _, err := ch.PromptOnlyTurns(time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("got %d turns, want 1", len(turns))
+	}
+	if turns[0].CWD != "/home/dev/repo" {
+		t.Errorf("cwd = %q, want first entry /home/dev/repo", turns[0].CWD)
 	}
 }
 

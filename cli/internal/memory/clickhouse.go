@@ -82,10 +82,39 @@ func promptTurnID(agent, session, timestamp, prompt string) string {
 	return "ch-" + hex.EncodeToString(sum[:8])
 }
 
+// firstWorkspaceRoot extracts the first entry from workspace_roots, which
+// the hook shim (cursorhook.addCommonAttributes, called on every span it
+// emits, including prompt spans) stamps as a JSON array serialized to a
+// string — e.g. `["/home/dev/repo"]` — never a bare path. Extraction is
+// done here in Go, after the row comes back, rather than in SQL with
+// ClickHouse's JSONExtractString: this package's tests run against a mocked
+// HTTP server that hands back canned rows directly, with no live
+// ClickHouse to execute a query against, so a Go helper is the only form of
+// this extraction that can actually be exercised by a unit test. A missing
+// or malformed value yields an empty cwd — turns without a workspace root
+// are correctly filtered out downstream by Credentials.AllowsPath's
+// deny-by-default, and no fallback is invented here.
+func firstWorkspaceRoot(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var roots []string
+	if err := json.Unmarshal([]byte(raw), &roots); err != nil {
+		return ""
+	}
+	if len(roots) == 0 {
+		return ""
+	}
+	return roots[0]
+}
+
 // PromptOnlyTurns returns prompts for every agent except Claude Code, whose
-// turns come from transcripts with real response text. Both otel_logs (the
-// native-OTel agents) and otel_traces (the hook-shim agents) are unioned,
-// mirroring how the leaderboard dashboard treats the two tables.
+// turns come from transcripts with real response text. Only otel_traces
+// (the hook-shim agents) is queried: otel_logs' event.name-based prompt
+// rows (Gemini CLI's telemetry) carry no directory attribute anywhere, so
+// every turn from that branch would always fail the downstream project
+// allowlist — keeping it would mean shipping a branch that provably never
+// contributes a synced turn.
 //
 // The second return value counts rows whose ts didn't parse against
 // clickHouseTimeLayout and were dropped entirely, since a Turn without a
@@ -94,38 +123,20 @@ func promptTurnID(agent, session, timestamp, prompt string) string {
 // way a caller can notice that ClickHouse's DateTime64 rendering drifted
 // and rows are silently vanishing from every sync.
 func (ch ClickHouse) PromptOnlyTurns(since time.Time) ([]Turn, int, error) {
-	// The UNION ALL is wrapped in a subquery because ClickHouse binds a
-	// trailing ORDER BY to the last SELECT only, not to the union.
 	sql := fmt.Sprintf(`
-SELECT ts, agent, prompt, session, model, cwd FROM (
-  SELECT
-    toString(Timestamp) AS ts,
-    ServiceName AS agent,
-    LogAttributes['prompt'] AS prompt,
-    LogAttributes['session.id'] AS session,
-    LogAttributes['model'] AS model,
-    '' AS cwd
-  FROM otel.otel_logs
-  WHERE LogAttributes['event.name'] IN ('user_prompt', 'gemini_cli.user_prompt')
-    AND LogAttributes['prompt'] NOT IN ('', '[MASKED]')
-    AND ServiceName != 'claude-code'
-    AND %s
-  UNION ALL
-  SELECT
-    toString(Timestamp) AS ts,
-    ServiceName AS agent,
-    SpanAttributes['gen_ai.prompt.0.content'] AS prompt,
-    SpanAttributes['langsmith.trace.session_id'] AS session,
-    SpanAttributes['gen_ai.request.model'] AS model,
-    SpanAttributes['langsmith.metadata.shell_cwd'] AS cwd
-  FROM otel.otel_traces
-  WHERE SpanAttributes['gen_ai.prompt.0.content'] NOT IN ('', '[MASKED]')
-    AND ServiceName != 'claude-code'
-    AND %s
-)
+SELECT
+  toString(Timestamp) AS ts,
+  ServiceName AS agent,
+  SpanAttributes['gen_ai.prompt.0.content'] AS prompt,
+  SpanAttributes['langsmith.trace.session_id'] AS session,
+  SpanAttributes['gen_ai.request.model'] AS model,
+  SpanAttributes['langsmith.metadata.workspace_roots'] AS workspace_roots
+FROM otel.otel_traces
+WHERE SpanAttributes['gen_ai.prompt.0.content'] NOT IN ('', '[MASKED]')
+  AND ServiceName != 'claude-code'
+  AND %s
 ORDER BY ts ASC
 FORMAT JSONEachRow`,
-		sinceClause("Timestamp", since),
 		sinceClause("Timestamp", since),
 	)
 
@@ -149,7 +160,7 @@ FORMAT JSONEachRow`,
 			Timestamp: timestamp.UTC(),
 			Prompt:    row["prompt"],
 			Model:     row["model"],
-			CWD:       row["cwd"],
+			CWD:       firstWorkspaceRoot(row["workspace_roots"]),
 		})
 	}
 	return turns, skipped, nil
