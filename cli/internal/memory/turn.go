@@ -49,22 +49,27 @@ func MaskText(s string) string {
 }
 
 // maybeMaskEmail masks a matched local@host candidate unless the host looks
-// like a version pin or module path (a leading digit, or a leading "v"
-// immediately followed by a digit) rather than a real address -- e.g.
-// "express@4.18.2", "node@22", or the "v1.10.2" in
-// "github.com/spf13/cobra@v1.10.2". A host that is purely digits and dots in
-// IPv4 shape (e.g. "10.0.0.5") is exempted from that check, since it's an
-// address despite the leading digit.
+// like a version pin, module path, or git ref rather than a real address --
+// e.g. "express@4.18.2", "node@22", the "v1.10.2" in
+// "github.com/spf13/cobra@v1.10.2", or "actions/checkout@main". A host that
+// is purely digits and dots in IPv4 shape (e.g. "10.0.0.5") is exempted from
+// the version check, since it's an address despite the leading digit.
+//
+// A trailing run of dots (e.g. a sentence-ending period right after the
+// host) is trimmed before classifying the host, since the host character
+// class in emailPattern can't tell a real domain-separator dot from
+// sentence punctuation; the untrimmed match is still what gets masked, so
+// the trailing punctuation is preserved either way.
 func maybeMaskEmail(match string) string {
 	at := strings.IndexByte(match, '@')
 	if at == -1 {
 		return match
 	}
-	host := match[at+1:]
+	host := strings.TrimRight(match[at+1:], ".")
 	if isIPv4Host(host) {
 		return cursorhook.MaskEmail(match)
 	}
-	if looksLikeVersion(host) {
+	if looksLikeVersion(host) || isRefLikeHost(host) {
 		return match
 	}
 	return cursorhook.MaskEmail(match)
@@ -102,6 +107,33 @@ func isIPv4Host(host string) bool {
 		}
 	}
 	return true
+}
+
+// refLikeHosts are known git refs and dist-tags that show up after "@" in
+// GitHub Actions pins, npm dist-tags, and go module refs -- e.g.
+// "actions/checkout@main", "lodash@latest", "user@HEAD". These aren't
+// hostnames and must survive masking untouched.
+var refLikeHosts = map[string]bool{
+	"main":    true,
+	"master":  true,
+	"latest":  true,
+	"stable":  true,
+	"head":    true,
+	"develop": true,
+	"dev":     true,
+	"next":    true,
+	"beta":    true,
+	"alpha":   true,
+	"edge":    true,
+	"canary":  true,
+}
+
+// isRefLikeHost reports whether host is an exact, case-insensitive match for
+// one of refLikeHosts. The match is exact rather than a prefix/substring
+// check so a real hostname like "dev-box" isn't misclassified just because
+// "dev" is one of the known words.
+func isRefLikeHost(host string) bool {
+	return refLikeHosts[strings.ToLower(host)]
 }
 
 // Masked returns a copy with every user-supplied text field redacted.

@@ -71,6 +71,66 @@ func TestMaskText(t *testing.T) {
 			"@types/node",
 			"@types/node",
 		},
+		{
+			"bare IP host, trailing sentence period",
+			"reach the admin at root@10.0.0.5.",
+			"reach the admin at r***@10.0.0.5.",
+		},
+		{
+			"email in prose, trailing sentence period",
+			"contact alice@example.com.",
+			"contact a***@example.com.",
+		},
+		{
+			"single-label host, wrapped in parens",
+			"(srujan@buildbox)",
+			"(s***@buildbox)",
+		},
+		{
+			"single-label host, wrapped in angle brackets",
+			"<srujan@buildbox>",
+			"<s***@buildbox>",
+		},
+		{
+			"github actions branch pin untouched",
+			"actions/checkout@main",
+			"actions/checkout@main",
+		},
+		{
+			"npm dist-tag untouched",
+			"lodash@latest",
+			"lodash@latest",
+		},
+		{
+			"go module ref untouched",
+			"go get github.com/foo/bar@main",
+			"go get github.com/foo/bar@main",
+		},
+		{
+			"npm dist-tag untouched, stable",
+			"pkg@stable",
+			"pkg@stable",
+		},
+		{
+			"git ref untouched, uppercase HEAD",
+			"user@HEAD",
+			"user@HEAD",
+		},
+		{
+			"single-label hostname with digit still masks",
+			"srujan@box2",
+			"s***@box2",
+		},
+		{
+			"single-label hostname, uppercase, still masks",
+			"srujan@MY-LAPTOP",
+			"s***@MY-LAPTOP",
+		},
+		{
+			"single-label hostname containing a ref word as prefix still masks",
+			"sam@dev-box",
+			"s***@dev-box",
+		},
 	}
 
 	for _, tt := range tests {
