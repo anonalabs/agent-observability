@@ -92,27 +92,32 @@ func memorySyncCmd() *cobra.Command {
 			}
 
 			// --quiet is the configuration the wizard prints into every
-			// user's crontab, so it must not be able to hide a problem --
-			// only the routine "it worked" line is conditional on it.
-			// Everything below reports a degradation or a non-zero skip
-			// count and always prints, to stderr, so cron's default
-			// "mail me anything the job wrote" behavior still surfaces it
-			// even on a --quiet run.
+			// user's crontab, so it must not be able to hide a real
+			// problem -- but Deduped and Filtered are routine, expected,
+			// non-zero on essentially every steady-state run: C1's lookback
+			// means a healthy sync re-reads a trailing window and correctly
+			// dedupes most of it every single time. Routing those to
+			// stderr unconditionally would mean the recommended cron line
+			// mails the user hourly forever, for nothing. Only genuine
+			// degradations (ClickHouse unreachable, unreadable files,
+			// unparseable rows) are worth --quiet overriding; those stay
+			// unconditional, on stderr, so cron's default "mail me
+			// anything the job wrote" behavior still surfaces them.
 			if !quiet {
 				verb := "Pushed"
 				if dryRun {
 					verb = "Would push"
 				}
 				fmt.Printf("%s %d turns to space %s.\n", verb, result.Pushed, creds.SpaceName)
+				if result.Deduped > 0 {
+					fmt.Printf("Skipped %d already-synced turns.\n", result.Deduped)
+				}
+				if result.Filtered > 0 {
+					fmt.Printf("Skipped %d turns outside the project allowlist.\n", result.Filtered)
+				}
 			}
 
 			warn := cmd.ErrOrStderr()
-			if result.Deduped > 0 {
-				fmt.Fprintf(warn, "Skipped %d already-synced turns.\n", result.Deduped)
-			}
-			if result.Filtered > 0 {
-				fmt.Fprintf(warn, "Skipped %d turns outside the project allowlist.\n", result.Filtered)
-			}
 			if result.SkippedFiles > 0 {
 				fmt.Fprintf(warn, "Skipped %d unreadable transcript files -- recovered automatically next run if the file becomes readable within the 24h lookback window, otherwise permanently missed. Investigate if this persists.\n", result.SkippedFiles)
 			}
@@ -127,7 +132,7 @@ func memorySyncCmd() *cobra.Command {
 				fmt.Fprintf(warn, "ClickHouse was unreachable for cost/token enrichment -- turns %s without that context.\n", verb)
 			}
 			if result.PromptOnlyErr != nil {
-				fmt.Fprintln(warn, "ClickHouse was unreachable for prompt-only turns -- Cursor/OpenCode turns could not be read this run, so only Claude Code transcripts were included.")
+				fmt.Fprintln(warn, "ClickHouse was unreachable for prompt-only turns -- Cursor turns could not be read this run, so only Claude Code transcripts were included.")
 			}
 			return nil
 		},
