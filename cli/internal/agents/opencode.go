@@ -88,11 +88,19 @@ export const AgentobsOtelHook: Plugin = async ({ $, directory }) => {
   // Cursor's own workspace_roots hook field. Stamping it on every payload
   // (rather than only the prompt event) matches addCommonAttributes'
   // behavior for Cursor, so the AnonaMemory connector's CWD-based allowlist
-  // (Credentials.AllowsPath) actually sees a working directory for OpenCode
+  // (Credentials.AllowsPath) can see a working directory for OpenCode
   // instead of dropping every turn.
   async function invoke(payload: Record<string, unknown>): Promise<void> {
     try {
-      await $`+"`agentobs cursor-hook --config %q`"+`.stdin(JSON.stringify({ workspace_roots: [directory], ...payload })).quiet().nothrow()
+      const body = JSON.stringify({ workspace_roots: [directory], ...payload })
+      // Bun's shipped $ typings declare .stdin as a WritableStream
+      // property, not a callable method: calling it as .stdin(body) throws
+      // "not a function" under Bun 1.2.10. This whole call sits inside a
+      // catch that must never block the agent, so that failed silently on
+      // every single event -- OpenCode's payload has never actually
+      // reached agentobs cursor-hook. Redirect stdin from a Response
+      // instead, which Bun's shell tag supports natively via "<".
+      await $`+"`agentobs cursor-hook --config %q < ${new Response(body)}`"+`.quiet().nothrow()
     } catch {
       // Hook failures must never block the agent.
     }
