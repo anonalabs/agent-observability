@@ -36,6 +36,41 @@ func TestMaskText(t *testing.T) {
 			"refactor the parser",
 			"refactor the parser",
 		},
+		{
+			"single-label git email host",
+			"contact srujan@my-laptop for the fix",
+			"contact s***@my-laptop for the fix",
+		},
+		{
+			"single-label git email host, trailing comma",
+			"my git email is srujan@buildbox, ...",
+			"my git email is s***@buildbox, ...",
+		},
+		{
+			"bare IP host",
+			"reach the admin at root@10.0.0.5",
+			"reach the admin at r***@10.0.0.5",
+		},
+		{
+			"npm version pin untouched",
+			"express@4.18.2",
+			"express@4.18.2",
+		},
+		{
+			"go module path with version pin untouched",
+			"github.com/spf13/cobra@v1.10.2",
+			"github.com/spf13/cobra@v1.10.2",
+		},
+		{
+			"bare version pin untouched",
+			"node@22",
+			"node@22",
+		},
+		{
+			"scoped package name, no local part before @",
+			"@types/node",
+			"@types/node",
+		},
 	}
 
 	for _, tt := range tests {
