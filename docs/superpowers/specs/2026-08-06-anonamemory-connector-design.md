@@ -138,7 +138,7 @@ Mapping to a `record/batch` item:
 
 ### Deduplication
 
-The batch endpoint offers no idempotency key, so dedup is entirely local. `memory.json` stores the last synced timestamp plus the set of `turn_id`s seen within a trailing 24-hour window. A turn is pushed only if its timestamp is newer than the watermark and its `turn_id` is not in that set. The window bounds the file's growth while covering out-of-order transcript writes.
+The batch endpoint offers no idempotency key, so dedup is entirely local. `memory.json` stores the last synced timestamp plus the set of `turn_id`s seen within a trailing 24-hour window. Sources are queried from `watermark - 24h`, not the watermark itself, so anything that arrived late relative to a faster source is re-read rather than permanently skipped; a turn is pushed only if its `turn_id` is not already in the seen set. (An explicit `--since` backfill is the one exception: it names its own window and is used as-is, with no lookback added, so a manual backfill never silently fetches more than asked.) The window bounds the file's growth while covering out-of-order transcript writes.
 
 ## Connect wizard flow
 
@@ -162,7 +162,7 @@ Runs at the tail of every `connect` path, after `printNextSteps`. Default is No.
 - **Wizard failure** (bad key, network down, no spaces returned): warn and save nothing. Does **not** fail `connect` — telemetry setup already succeeded and must not be rolled back by an optional add-on.
 - **Sync, retryable status** (429, 500, 503): exponential backoff with jitter, capped at 5 attempts.
 - **Sync, other 4xx**: abort immediately, printing `code` and `request_id`.
-- **Failed batch**: the watermark does not advance past it, so the next run retries those turns.
+- **Failed batch**: the watermark advances over whatever contiguous, oldest-first prefix the batch call reports as accepted before the error; only the turns after that prefix retry on the next run, so a partial failure doesn't re-push chunks the server already took.
 - **ClickHouse unreachable**: sync proceeds without cost/tool enrichment. Degraded, not fatal — transcripts are the primary source.
 - **Unreadable or malformed transcript**: skip the file, count it, report the count in the summary rather than aborting the run.
 
