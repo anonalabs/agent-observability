@@ -24,6 +24,7 @@ Running the stack (from repo root, since `compose.DefaultComposeFile` searches u
 ./cli/agentobs connect            # --agent claude-code|gemini-cli|cursor|copilot|codex|opencode
 ./cli/agentobs status             # HTTP health check of all 4 services
 ./cli/agentobs config-alerts      # regenerates grafana/provisioning/alerting/*.yaml, restarts Grafana
+./cli/agentobs memory sync        # push turns to AnonaMemory (opt-in, see docs/anonamemory.md)
 docker compose logs -f otel-collector
 ```
 
@@ -59,6 +60,12 @@ Named for Cursor (first supported) but agent-agnostic. Invoked once per hook eve
 ### Config precedence
 
 `config.Resolve` (`cli/internal/config/config.go`) is the single point of truth: **flag > YAML (`--config`) > interactive prompt > documented default**, erroring under `--non-interactive` when there's no default. Every command uses it; don't read flags directly for user-facing settings. Flags are only treated as "set" via `cmd.Flags().Changed(name)` (see `flagOrNil`), so a `false` bool flag is distinguishable from an unset one.
+
+### AnonaMemory connector (`cli/internal/memory/`)
+
+Optional, opt-in, and off by default. `Sync` gathers turns from two readers — `ClaudeCodeSource` parses `~/.claude/projects/*/*.jsonl` for paired prompt+response text, `ClickHouse.PromptOnlyTurns` supplies prompt-only turns for the four hook-shim agents (Cursor, Copilot, Codex, OpenCode) plus `ClickHouse.SessionStats` for per-session cost — then filters by a deny-by-default project allowlist, masks with `MaskText`, and writes them in chunks of 100 to `POST /v1/record/batch`. Gemini CLI contributes nothing: its telemetry carries no directory attribute, so nothing from it can ever pass the allowlist, and the `otel_logs` branch that once queried it is gone.
+
+Claude Code's conversation text never enters ClickHouse -- its transcript is read at sync time and goes straight to the API. The hook-shim agents' prompt text is the exception: it's read back out of `otel_traces` (`SpanAttributes['gen_ai.prompt.0.content']`), where it already lands as part of normal span export, keyed to a working directory via the `workspace_roots` attribute the hook shim stamps on every span. Dedup is local (`Credentials.RecentTurns`, a 24h window) because the batch endpoint has no idempotency key. A failed write leaves the watermark unmoved so the next run retries; a ClickHouse outage degrades the run rather than ending it.
 
 ## Invariants worth preserving
 

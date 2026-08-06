@@ -14,6 +14,7 @@ Claude Code and Gemini CLI ship native OpenTelemetry. Cursor doesn't. Every othe
 - **Any OTel-emitting tool works via config, not code.** Claude Code and Gemini CLI ship as declarative specs (`cli/internal/agents/builtin.yaml`); add your own tool the same way in `~/.config/agentobs/agents.yaml` -- `agentobs agents list` shows everything registered.
 - **Cursor, GitHub Copilot coding agent, Codex, and OpenCode supported despite none of them having native OTel**: a from-scratch Go hook-processing pipeline that normalizes each tool's own hook event vocabulary (camelCase for Cursor/Copilot, PascalCase for Codex/OpenCode) onto one shared span model, no reliance on any external package.
 - **Agent Leaderboard + Session Timeline dashboards**: the actual innovation, real cross-agent views built on `UNION` queries across ClickHouse's logs and traces tables, normalized on `ServiceName`/session id. Pick one session, see its full timeline regardless of which agent ran it. Nobody else treats "which agent" as a first-class dimension.
+- **Optional AnonaMemory push**: opt in at the end of `agentobs connect` and your agents' prompts and responses become a queryable memory layer, scoped to a project allowlist and masked before they leave the machine. See [docs/anonamemory.md](docs/anonamemory.md).
 - **Config merges, never overwrites.** `connect` always backs up (`.bak`) before touching `hooks.json`/`settings.json`/shell rc files, and merges rather than replaces, safe to run alongside other tools that already registered hooks.
 - **Privacy-first**: prompt/tool-detail logging is off by default across every agent, toggled explicitly per `connect` run.
 - 6 pre-built Grafana dashboards: Agent Leaderboard, Session Timeline, Token & Cost Usage, Session & Tool Explorer, Events Detail, Cursor Traces.
@@ -67,6 +68,7 @@ Full design rationale, including how to add another agent, in [docs/architecture
 | [docs/gemini-cli.md](docs/gemini-cli.md) | Gemini CLI telemetry reference |
 | [docs/cursor.md](docs/cursor.md) | Cursor hook shim reference |
 | [docs/other-agents.md](docs/other-agents.md) | GitHub Copilot coding agent, Codex, OpenCode, Antigravity |
+| [docs/anonamemory.md](docs/anonamemory.md) | Push prompts + responses to AnonaMemory |
 | [docs/architecture.md](docs/architecture.md) | System design + cloud export options |
 | [docs/security.md](docs/security.md) | Opt-in auth hardening (`agentobs install --secure`) |
 | [docs/alerting.md](docs/alerting.md) | Cost/rate-limit/tool-failure alert rules + webhook delivery |
