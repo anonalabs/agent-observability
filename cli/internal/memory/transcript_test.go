@@ -92,12 +92,15 @@ func TestClaudeCodeSourceSkipsSidechains(t *testing.T) {
 {"type":"assistant","uuid":"a1","isSidechain":true,"timestamp":"2026-08-06T12:00:01Z","sessionId":"sess-3","cwd":"/home/dev/repo","message":{"role":"assistant","content":[{"type":"text","text":"subagent reply"}]}}
 `)
 
-	turns, _, err := ClaudeCodeSource{Root: root}.Turns(time.Time{})
+	turns, skipped, err := ClaudeCodeSource{Root: root}.Turns(time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(turns) != 0 {
 		t.Fatalf("got %d turns, want 0 -- sidechains are subagent traffic", len(turns))
+	}
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0 -- a sidechain-only file is structurally fine, not corrupt", skipped)
 	}
 }
 
@@ -120,6 +123,76 @@ func TestClaudeCodeSourceHonoursSince(t *testing.T) {
 	}
 	if turns[0].Prompt != "new" {
 		t.Errorf("prompt = %q, want the turn after since", turns[0].Prompt)
+	}
+}
+
+func TestClaudeCodeSourceSinceFilteredFileIsNotSkipped(t *testing.T) {
+	root := t.TempDir()
+	writeTranscript(t, root, "-home-dev-repo", "sess-5", `
+{"type":"user","uuid":"u1","timestamp":"2026-08-06T10:00:00Z","sessionId":"sess-5","cwd":"/home/dev/repo","message":{"role":"user","content":"old"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-08-06T10:00:01Z","sessionId":"sess-5","cwd":"/home/dev/repo","message":{"role":"assistant","content":[{"type":"text","text":"old reply"}]}}
+`)
+
+	since := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	turns, skipped, err := ClaudeCodeSource{Root: root}.Turns(since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(turns) != 0 {
+		t.Errorf("got %d turns, want 0 -- the only turn is before since", len(turns))
+	}
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0 -- the file is structurally fine, just filtered by since", skipped)
+	}
+}
+
+func TestClaudeCodeSourceCountsUnparseableTimestampsAsSkipped(t *testing.T) {
+	root := t.TempDir()
+	writeTranscript(t, root, "-home-dev-repo", "bad-timestamps", `
+{"type":"assistant","uuid":"a1","timestamp":"not-a-timestamp","sessionId":"s","cwd":"/home/dev/repo","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}
+{"type":"assistant","uuid":"a2","timestamp":"also-not-a-timestamp","sessionId":"s","cwd":"/home/dev/repo","message":{"role":"assistant","content":[{"type":"text","text":"there"}]}}
+`)
+
+	turns, skipped, err := ClaudeCodeSource{Root: root}.Turns(time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(turns) != 0 {
+		t.Errorf("got %d turns, want 0", len(turns))
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1 -- every line failed to parse a usable timestamp", skipped)
+	}
+}
+
+func TestClaudeCodeSourceCountsUnreadableFileAsSkipped(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root bypasses file permission bits")
+	}
+
+	root := t.TempDir()
+	writeTranscript(t, root, "-home-dev-repo", "good", `
+{"type":"user","uuid":"u1","timestamp":"2026-08-06T12:00:00Z","sessionId":"s","cwd":"/home/dev/repo","message":{"role":"user","content":"hi"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-08-06T12:00:01Z","sessionId":"s","cwd":"/home/dev/repo","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}
+`)
+	writeTranscript(t, root, "-home-dev-repo", "unreadable", `
+{"type":"user","uuid":"u2","timestamp":"2026-08-06T12:00:00Z","sessionId":"s2","cwd":"/home/dev/repo","message":{"role":"user","content":"hi"}}
+`)
+	unreadablePath := filepath.Join(root, "-home-dev-repo", "unreadable.jsonl")
+	if err := os.Chmod(unreadablePath, 0o000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadablePath, 0o644) })
+
+	turns, skipped, err := ClaudeCodeSource{Root: root}.Turns(time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Errorf("got %d turns, want the readable file's turn", len(turns))
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1 for the unreadable file", skipped)
 	}
 }
 

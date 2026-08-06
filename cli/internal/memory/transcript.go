@@ -130,11 +130,6 @@ func (s ClaudeCodeSource) turnsFromFile(path string, since time.Time) ([]Turn, e
 		if line.Type != "user" && line.Type != "assistant" {
 			continue
 		}
-		sawValidLine = true
-		// Sidechains are subagent traffic, not the user's own conversation.
-		if line.IsSidechain {
-			continue
-		}
 
 		var msg transcriptMessage
 		if err := json.Unmarshal(line.Message, &msg); err != nil {
@@ -143,6 +138,19 @@ func (s ClaudeCodeSource) turnsFromFile(path string, since time.Time) ([]Turn, e
 
 		timestamp, err := time.Parse(time.RFC3339, line.Timestamp)
 		if err != nil {
+			continue
+		}
+
+		// The line fully parsed -- type recognized, message body unmarshalled,
+		// timestamp valid -- so this file has at least one genuine candidate
+		// turn line, even if it's a sidechain or later excluded by since.
+		// Lines that fail earlier (bad JSON, unrecognized type, bad message,
+		// bad timestamp) never reach here, so a file of nothing but such
+		// lines is genuinely unusable and gets counted as skipped below.
+		sawValidLine = true
+
+		// Sidechains are subagent traffic, not the user's own conversation.
+		if line.IsSidechain {
 			continue
 		}
 
