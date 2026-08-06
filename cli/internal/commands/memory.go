@@ -181,9 +181,10 @@ func memoryStatusCmd() *cobra.Command {
 				fmt.Println("ClickHouse is unreachable, so prompt-only agents (Cursor, Copilot, Codex, OpenCode) contribute nothing.")
 			} else if result.Pushed == 0 {
 				fmt.Println()
-				fmt.Println("Nothing pending. Note that Cursor, Copilot, Codex, and OpenCode only contribute prompts if")
-				fmt.Println("you enabled prompt logging when connecting them (declining the hook shim's mask-prompts")
-				fmt.Println("question) -- that defaults to off. Gemini CLI is not supported for memory sync.")
+				fmt.Println("Nothing pending. Note that Cursor, Copilot, Codex, and OpenCode capture prompt text by")
+				fmt.Println("default -- they contribute nothing here only if you answered yes to the hook shim's mask-prompts")
+				fmt.Println("question when connecting them, or if none of their sessions match the project allowlist.")
+				fmt.Println("Gemini CLI is not supported for memory sync.")
 			}
 			return nil
 		},
