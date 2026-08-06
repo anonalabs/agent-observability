@@ -1,0 +1,185 @@
+package memory
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/AlecAivazis/survey/v2"
+)
+
+const signupURL = "https://docs.anonalabs.com/quickstart"
+
+// createNewSpaceOption is the sentinel entry in the space picker.
+const createNewSpaceOption = "Create a new space..."
+
+// OfferConnect asks whether to push conversation turns to AnonaMemory and,
+// if so, walks through key entry, space selection, the project allowlist,
+// and a first sync. It never returns an error that should fail `connect` --
+// telemetry setup has already succeeded by this point, and an optional
+// add-on must not undo it. Failures are printed and swallowed.
+func OfferConnect(cwd string, nonInteractive bool, enabled *bool) error {
+	if nonInteractive {
+		if enabled != nil && *enabled {
+			fmt.Println("Skipping AnonaMemory: --memory needs an API key, which can't be collected non-interactively.")
+			fmt.Println("Run `agentobs connect` interactively, or write ~/.config/agentobs/memory.json by hand (see docs/anonamemory.md).")
+		}
+		return nil
+	}
+
+	if enabled == nil {
+		want := false
+		prompt := &survey.Confirm{
+			Message: "Also push prompts and responses to AnonaMemory?",
+			Default: false,
+		}
+		if err := survey.AskOne(prompt, &want); err != nil {
+			return nil
+		}
+		if !want {
+			return nil
+		}
+	} else if !*enabled {
+		return nil
+	}
+
+	if err := runWizard(cwd); err != nil {
+		fmt.Printf("AnonaMemory setup didn't complete: %v\n", err)
+		fmt.Println("Telemetry is still wired up. Re-run `agentobs connect` to try again.")
+	}
+	return nil
+}
+
+func runWizard(cwd string) error {
+	fmt.Println()
+	fmt.Printf("Create an API key at %s (signing up doesn't make one for you).\n", signupURL)
+
+	var apiKey string
+	if err := survey.AskOne(&survey.Password{Message: "AnonaMemory API key:"}, &apiKey, survey.WithValidator(survey.Required)); err != nil {
+		return err
+	}
+
+	client := NewClient(apiKey)
+
+	spaces, err := client.ListSpaces()
+	if err != nil {
+		return fmt.Errorf("listing spaces: %w", err)
+	}
+
+	spaceID, spaceName, err := chooseSpace(client, spaces)
+	if err != nil {
+		return err
+	}
+
+	projects, err := chooseProjects(cwd)
+	if err != nil {
+		return err
+	}
+
+	creds := &Credentials{
+		APIKey:      apiKey,
+		SpaceID:     spaceID,
+		SpaceName:   spaceName,
+		Projects:    projects,
+		RecentTurns: map[string]time.Time{},
+	}
+	if err := SaveCredentials(creds); err != nil {
+		return err
+	}
+
+	path, _ := CredentialsPath()
+	fmt.Printf("Saved %s (mode 0600).\n", path)
+
+	source, err := NewClaudeCodeSource()
+	if err != nil {
+		return err
+	}
+	result, syncErr := Sync(creds, client, []TranscriptSource{source}, NewClickHouse(), Options{})
+	if err := SaveCredentials(creds); err != nil {
+		return err
+	}
+	if syncErr != nil {
+		return fmt.Errorf("first sync: %w", syncErr)
+	}
+
+	fmt.Printf("Pushed %d turns to %s.\n", result.Pushed, spaceName)
+	// Mirrors the gating and wording `agentobs memory sync` uses for these
+	// two failure modes, so the user doesn't see contradictory phrasing
+	// depending on which command happened to run the sync.
+	if result.EnrichErr != nil && result.Pushed > 0 {
+		fmt.Println("ClickHouse was unreachable for cost/token enrichment -- turns went out without that context.")
+	}
+	if result.PromptOnlyErr != nil {
+		fmt.Println("ClickHouse was unreachable, so only Claude Code transcripts were read this run.")
+	}
+	fmt.Println()
+	fmt.Println("Keep it current with an hourly cron entry:")
+	fmt.Println("  0 * * * * agentobs memory sync --quiet")
+	fmt.Println("Check state any time with `agentobs memory status`.")
+	return nil
+}
+
+// chooseSpace shows existing spaces plus a create option. With no spaces at
+// all, it goes straight to creation -- an empty picker is a dead end.
+func chooseSpace(client *Client, spaces []Space) (string, string, error) {
+	if len(spaces) == 0 {
+		fmt.Println("No spaces on this account yet.")
+		return createSpace(client)
+	}
+
+	options := make([]string, 0, len(spaces)+1)
+	byName := map[string]string{}
+	for _, space := range spaces {
+		options = append(options, space.Name)
+		byName[space.Name] = space.SpaceID
+	}
+	options = append(options, createNewSpaceOption)
+
+	var chosen string
+	prompt := &survey.Select{Message: "Space to record into:", Options: options}
+	if err := survey.AskOne(prompt, &chosen); err != nil {
+		return "", "", err
+	}
+	if chosen == createNewSpaceOption {
+		return createSpace(client)
+	}
+	return byName[chosen], chosen, nil
+}
+
+func createSpace(client *Client) (string, string, error) {
+	var name string
+	prompt := &survey.Input{Message: "New space name:", Default: "coding-agents"}
+	if err := survey.AskOne(prompt, &name, survey.WithValidator(survey.Required)); err != nil {
+		return "", "", err
+	}
+	space, err := client.CreateSpace(name, "AI coding agent conversation history")
+	if err != nil {
+		return "", "", fmt.Errorf("creating space: %w", err)
+	}
+	fmt.Printf("Created space %s (%s).\n", space.Name, space.SpaceID)
+	return space.SpaceID, space.Name, nil
+}
+
+// chooseProjects collects the allowlist. It is deny-by-default: only turns
+// whose working directory sits inside one of these paths are ever pushed.
+func chooseProjects(cwd string) ([]string, error) {
+	fmt.Println()
+	fmt.Println("Only sessions under these directories are pushed. Everything else stays local.")
+
+	var raw string
+	prompt := &survey.Input{
+		Message: "Project directories (comma-separated):",
+		Default: cwd,
+	}
+	if err := survey.AskOne(prompt, &raw, survey.WithValidator(survey.Required)); err != nil {
+		return nil, err
+	}
+
+	var projects []string
+	for _, part := range splitAndTrim(raw) {
+		projects = append(projects, ExpandHome(part))
+	}
+	if len(projects) == 0 {
+		return nil, fmt.Errorf("at least one project directory is required")
+	}
+	return projects, nil
+}

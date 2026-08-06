@@ -13,6 +13,7 @@ import (
 
 	"github.com/anonalabs/agent-observability/cli/internal/agents"
 	"github.com/anonalabs/agent-observability/cli/internal/config"
+	"github.com/anonalabs/agent-observability/cli/internal/memory"
 )
 
 const defaultEndpoint = "http://localhost:4317"
@@ -122,7 +123,7 @@ func backupIfExists(path string) error {
 
 func ConnectCmd() *cobra.Command {
 	var agentFlag, endpointFlag, configFlag, agentsFileFlag, authTokenFlag string
-	var writeShellRcFlag, logUserPromptsFlag, logToolDetailsFlag *bool
+	var writeShellRcFlag, logUserPromptsFlag, logToolDetailsFlag, memoryFlag *bool
 	var nonInteractive bool
 
 	cmd := &cobra.Command{
@@ -168,31 +169,45 @@ func ConnectCmd() *cobra.Command {
 				return err
 			}
 
-			if hookAgent, ok := hookAgents()[agentName]; ok {
-				return connectHookAgent(hookAgent, endpoint, yamlConfig, nonInteractive, authTokenFlag)
-			}
-			if agentName == "opencode" {
-				return connectOpenCode(endpoint, yamlConfig, nonInteractive, authTokenFlag)
-			}
+			var connectErr error
 
-			spec, ok := reg.Get(agentName)
-			if !ok {
-				return fmt.Errorf("agent '%s' not found in registry", agentName)
-			}
-
-			flagAnswers := map[string]*bool{
-				"log_user_prompts": flagOrNil(cmd, "log-user-prompts", logUserPromptsFlag),
-				"log_tool_details": flagOrNil(cmd, "log-tool-details", logToolDetailsFlag),
-			}
-
-			switch spec.Kind {
-			case "json-merge":
-				return connectJSONMerge(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers, authTokenFlag)
-			case "env":
-				return connectEnv(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers, flagOrNil(cmd, "write-shell-rc", writeShellRcFlag), authTokenFlag)
+			switch {
+			case hookAgents()[agentName] != nil:
+				connectErr = connectHookAgent(hookAgents()[agentName], endpoint, yamlConfig, nonInteractive, authTokenFlag)
+			case agentName == "opencode":
+				connectErr = connectOpenCode(endpoint, yamlConfig, nonInteractive, authTokenFlag)
 			default:
-				return fmt.Errorf("agent %q has unknown kind %q (expected \"env\" or \"json-merge\")", spec.Name, spec.Kind)
+				spec, ok := reg.Get(agentName)
+				if !ok {
+					return fmt.Errorf("agent '%s' not found in registry", agentName)
+				}
+
+				flagAnswers := map[string]*bool{
+					"log_user_prompts": flagOrNil(cmd, "log-user-prompts", logUserPromptsFlag),
+					"log_tool_details": flagOrNil(cmd, "log-tool-details", logToolDetailsFlag),
+				}
+
+				switch spec.Kind {
+				case "json-merge":
+					connectErr = connectJSONMerge(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers, authTokenFlag)
+				case "env":
+					connectErr = connectEnv(*spec, endpoint, yamlConfig, nonInteractive, flagAnswers, flagOrNil(cmd, "write-shell-rc", writeShellRcFlag), authTokenFlag)
+				default:
+					return fmt.Errorf("agent %q has unknown kind %q (expected \"env\" or \"json-merge\")", spec.Name, spec.Kind)
+				}
 			}
+
+			if connectErr != nil {
+				return connectErr
+			}
+
+			// Offered only after telemetry is wired up, so a declined or
+			// failed AnonaMemory setup never undoes a successful connect.
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			return memory.OfferConnect(cwd, nonInteractive, flagOrNil(cmd, "memory", memoryFlag))
 		},
 	}
 
@@ -204,6 +219,7 @@ func ConnectCmd() *cobra.Command {
 	writeShellRcFlag = cmd.Flags().Bool("write-shell-rc", false, "")
 	logUserPromptsFlag = cmd.Flags().Bool("log-user-prompts", false, "capture full prompt text (privacy-sensitive, claude-code only)")
 	logToolDetailsFlag = cmd.Flags().Bool("log-tool-details", false, "capture bash commands and file paths (privacy-sensitive, claude-code only)")
+	memoryFlag = cmd.Flags().Bool("memory", false, "also push prompts and responses to AnonaMemory (interactive only)")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "")
 	cmd.Flags().BoolVar(&nonInteractive, "yes", false, "")
 

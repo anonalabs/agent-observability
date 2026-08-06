@@ -148,3 +148,27 @@ func (c *Credentials) MarkSynced(ids map[string]time.Time) {
 		}
 	}
 }
+
+// splitAndTrim splits a comma-separated list, dropping empty entries.
+func splitAndTrim(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// ExpandHome resolves a leading ~/ the same way internal/agents does.
+func ExpandHome(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[2:])
+}
