@@ -98,9 +98,15 @@ func (s ClaudeCodeSource) Turns(since time.Time) ([]Turn, int, error) {
 	return all, skipped, nil
 }
 
-// turnsFromFile pairs each user prompt with the next assistant message that
-// actually contains text. Tool-only assistant messages in between contribute
-// their tool names to the turn rather than ending it.
+// turnsFromFile pairs each user prompt with every assistant message that
+// follows it, up to the next real user prompt (or end of file). Agentic
+// sessions routinely emit a short text preamble, run one or more tools, and
+// then emit the substantive answer as separate assistant messages in
+// between rounds of tool use -- closing the turn at the first text block
+// (the earlier behavior) captured the preamble and silently discarded the
+// real answer. Tool-result lines come back with role "user" but carry no
+// prompt text, so they're recognized and skipped without closing the turn
+// that's still accumulating around them.
 func (s ClaudeCodeSource) turnsFromFile(path string, since time.Time) ([]Turn, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -109,9 +115,65 @@ func (s ClaudeCodeSource) turnsFromFile(path string, since time.Time) ([]Turn, e
 	defer f.Close()
 
 	var turns []Turn
+
+	// Turn-in-progress state. pending holds the fields known as soon as the
+	// prompt line arrives (Prompt/CWD/GitBranch/SessionID); everything
+	// assistant-message-derived accumulates alongside it until closeTurn.
 	var pending *Turn
+	var responseParts []string
 	var tools []string
+	// lastTurnID/lastTimestamp/lastModel come from the most recent
+	// text-bearing assistant message in the turn, not just any assistant
+	// message -- a tool_use-only message never carried a turn identity
+	// even under the old close-at-first-text behavior, and multiple text
+	// blocks in one turn should resolve to its final, most complete
+	// answer's identity. TurnID is therefore the dedup key of the *last*
+	// text-bearing assistant message, deliberately: it's sourced from the
+	// same message as Timestamp (see below), so a record's turn_id and
+	// timestamp always trace back to one line in the transcript rather
+	// than two different ones, and re-parsing the same file always
+	// produces the same id for the same accumulated turn.
+	var lastTurnID string
+	var lastTimestamp time.Time
+	var lastModel string
+	// inputTokens/outputTokens sum every assistant message's usage in the
+	// turn, text-bearing or not -- each one is a real API call made while
+	// producing this turn's overall response, so summing (rather than
+	// keeping only the closing message's count) is the accurate cost.
+	var inputTokens, outputTokens int
+
 	sawValidLine := false
+
+	// closeTurn finalizes whatever turn has been accumulating, if it ever
+	// received actual response text, and appends it (subject to the since
+	// filter) before resetting all per-turn state. Called both when the
+	// next real user prompt arrives and once more after the scan loop ends,
+	// since the last exchange in a file has no following prompt to trigger
+	// on and must still be emitted rather than silently dropped.
+	closeTurn := func() {
+		if pending != nil && len(responseParts) > 0 {
+			turn := *pending
+			turn.TurnID = lastTurnID
+			turn.Timestamp = lastTimestamp
+			turn.Response = strings.Join(responseParts, "\n")
+			turn.Model = lastModel
+			turn.InputTokens = inputTokens
+			turn.OutputTokens = outputTokens
+			turn.Tools = tools
+
+			if since.IsZero() || turn.Timestamp.After(since) {
+				turns = append(turns, turn)
+			}
+		}
+		pending = nil
+		responseParts = nil
+		tools = nil
+		lastTurnID = ""
+		lastTimestamp = time.Time{}
+		lastModel = ""
+		inputTokens = 0
+		outputTokens = 0
+	}
 
 	scanner := bufio.NewScanner(f)
 	// Transcript lines routinely exceed bufio's 64KB default.
@@ -162,9 +224,15 @@ func (s ClaudeCodeSource) turnsFromFile(path string, since time.Time) ([]Turn, e
 				}
 			}
 			if len(promptParts) == 0 {
-				// Tool results come back as user-role lines; they aren't prompts.
+				// Tool results come back as user-role lines; they aren't
+				// prompts, and must not close a turn that's still
+				// accumulating assistant text around them.
 				continue
 			}
+
+			// A real prompt closes whatever turn was accumulating before
+			// starting the new one.
+			closeTurn()
 			pending = &Turn{
 				Agent:     "claude-code",
 				SessionID: line.SessionID,
@@ -172,16 +240,22 @@ func (s ClaudeCodeSource) turnsFromFile(path string, since time.Time) ([]Turn, e
 				CWD:       line.CWD,
 				GitBranch: line.GitBranch,
 			}
-			tools = nil
 			continue
 		}
 
-		var responseParts []string
+		// Assistant line. Nothing to accumulate into without an open turn
+		// (e.g. a stray assistant line before any prompt in the file).
+		if pending == nil {
+			continue
+		}
+
+		var sawText bool
 		for _, b := range msg.blocks() {
 			switch b.Type {
 			case "text":
 				if b.Text != "" {
 					responseParts = append(responseParts, b.Text)
+					sawText = true
 				}
 			case "tool_use":
 				if b.Name != "" {
@@ -189,26 +263,17 @@ func (s ClaudeCodeSource) turnsFromFile(path string, since time.Time) ([]Turn, e
 				}
 			}
 		}
-		if len(responseParts) == 0 || pending == nil {
-			continue
+		if sawText {
+			lastTurnID = line.UUID
+			lastTimestamp = timestamp
+			lastModel = msg.Model
 		}
-
-		turn := *pending
-		turn.TurnID = line.UUID
-		turn.Timestamp = timestamp
-		turn.Response = strings.Join(responseParts, "\n")
-		turn.Model = msg.Model
-		turn.InputTokens = msg.Usage.InputTokens
-		turn.OutputTokens = msg.Usage.OutputTokens
-		turn.Tools = tools
-		pending = nil
-		tools = nil
-
-		if !since.IsZero() && !turn.Timestamp.After(since) {
-			continue
-		}
-		turns = append(turns, turn)
+		inputTokens += msg.Usage.InputTokens
+		outputTokens += msg.Usage.OutputTokens
 	}
+
+	// The last exchange in the file has no following prompt to close it.
+	closeTurn()
 
 	if err := scanner.Err(); err != nil {
 		return nil, err
