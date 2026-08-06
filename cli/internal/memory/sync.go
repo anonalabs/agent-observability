@@ -56,18 +56,27 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 		since = *opts.Since
 	}
 
-	// Sources are queried from a point dedupWindow earlier than since, not
-	// since itself. Sources have very different latencies -- a transcript
-	// line lands on disk instantly, the equivalent hook-shim span reaches
-	// ClickHouse only after OTLP batching plus insert -- so a strict
-	// since cutoff permanently loses anything that was still in flight when
-	// the watermark last advanced. Re-reading the trailing window and
-	// relying on Credentials.Seen to reject what was already pushed is what
-	// makes that window (and RecentTurns) do anything at all. A zero since
-	// means "never synced" and must stay zero -- subtracting from it would
-	// produce a non-zero time.Time that accidentally starts filtering.
+	// Sources are queried from a point dedupWindow earlier than the
+	// watermark, not the watermark itself. Sources have very different
+	// latencies -- a transcript line lands on disk instantly, the
+	// equivalent hook-shim span reaches ClickHouse only after OTLP batching
+	// plus insert -- so a strict watermark cutoff permanently loses
+	// anything that was still in flight when the watermark last advanced.
+	// Re-reading the trailing window and relying on Credentials.Seen to
+	// reject what was already pushed is what makes that window (and
+	// RecentTurns) do anything at all. A zero watermark means "never
+	// synced" and must stay zero -- subtracting from it would produce a
+	// non-zero time.Time that accidentally starts filtering.
+	//
+	// This lookback applies only to the watermark path, not to an explicit
+	// opts.Since: --since names a manual backfill window the user chose on
+	// purpose ("everything from the last 7 days"), and it doesn't have a
+	// "turn still in flight when it was set" problem to correct for -- there
+	// was no prior sync run whose watermark it's catching up on. Silently
+	// widening it by dedupWindow would fetch (and upload to a third party)
+	// more than the user asked for.
 	queryFrom := since
-	if !since.IsZero() {
+	if opts.Since == nil && !since.IsZero() {
 		queryFrom = since.Add(-dedupWindow)
 	}
 

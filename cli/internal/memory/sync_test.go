@@ -329,6 +329,58 @@ func TestSyncNeverSyncedQueriesWithZeroSince(t *testing.T) {
 	}
 }
 
+// TestSyncExplicitSinceSkipsLookback pins the fix for the regression the
+// lookback introduced: --since is a user-named manual-backfill window
+// ("everything from the last 7 days"), not a watermark that a slower
+// source might still be catching up on, so widening it by dedupWindow would
+// silently fetch -- and upload to a third party -- more than the user
+// asked for. Only the stored-watermark path gets the lookback.
+func TestSyncExplicitSinceSkipsLookback(t *testing.T) {
+	explicitSince := time.Date(2026, 8, 6, 11, 0, 0, 0, time.UTC)
+	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	rec := &fakeRecorder{}
+	src := &fakeSource{}
+	enricher := &fakeEnricher{}
+
+	if _, err := Sync(creds, rec, []TranscriptSource{src}, enricher, Options{Since: &explicitSince}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(src.sinceCalls) != 1 || !src.sinceCalls[0].Equal(explicitSince) {
+		t.Errorf("transcript source queried with since=%v, want the explicit %v with no lookback subtracted", src.sinceCalls, explicitSince)
+	}
+	if len(enricher.promptSinceCalls) != 1 || !enricher.promptSinceCalls[0].Equal(explicitSince) {
+		t.Errorf("PromptOnlyTurns queried with since=%v, want %v", enricher.promptSinceCalls, explicitSince)
+	}
+	if len(enricher.statsSinceCalls) != 1 || !enricher.statsSinceCalls[0].Equal(explicitSince) {
+		t.Errorf("SessionStats queried with since=%v, want %v", enricher.statsSinceCalls, explicitSince)
+	}
+}
+
+// TestSyncExplicitSinceExcludesTurnsOutsideTheNamedWindow is the end-to-end
+// version of the regression: a fresh install (zero watermark) run with
+// --since 1h must not pick up a turn from 20 hours ago just because that
+// falls inside dedupWindow's 24h span -- --since names the window itself.
+func TestSyncExplicitSinceExcludesTurnsOutsideTheNamedWindow(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	since1h := now.Add(-1 * time.Hour)
+	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	rec := &fakeRecorder{}
+	old := turnAt("old", "/home/dev/repo", now.Add(-20*time.Hour))
+	src := &fakeSource{turns: []Turn{old}}
+
+	result, err := Sync(creds, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{Since: &since1h})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Pushed != 0 {
+		t.Errorf("pushed = %d, want 0 -- a turn from 20h ago is outside an explicit --since 1h window", result.Pushed)
+	}
+	if len(rec.items) != 0 {
+		t.Errorf("recorded %d items, want 0", len(rec.items))
+	}
+}
+
 // TestSyncRePushesLateArrivingTurnBelowWatermark is C1's end-to-end proof:
 // a turn whose timestamp is at or below the watermark, and that was never
 // previously synced, must still go out on a later run -- this is the "two
