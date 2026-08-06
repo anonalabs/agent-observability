@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -106,10 +107,17 @@ func memorySyncCmd() *cobra.Command {
 					fmt.Printf("Skipped %d unreadable transcript files.\n", result.SkippedFiles)
 				}
 				if result.SkippedRows > 0 {
-					fmt.Printf("ClickHouse returned %d rows this could not read (bad timestamp or cost) -- those turns' data isn't lost, just missing from this sync.\n", result.SkippedRows)
+					fmt.Printf("ClickHouse returned %d rows that could not be read (bad timestamp or cost) -- those turns' data isn't lost, just missing from this sync.\n", result.SkippedRows)
 				}
-				if result.EnrichErr != nil || result.PromptOnlyErr != nil {
-					fmt.Println("ClickHouse was unreachable -- turns went out without cost/tool context, and prompt-only agents were skipped this run.")
+				if result.EnrichErr != nil {
+					verb := "went out"
+					if dryRun {
+						verb = "would go out"
+					}
+					fmt.Printf("ClickHouse was unreachable for cost/token enrichment -- turns %s without that context.\n", verb)
+				}
+				if result.PromptOnlyErr != nil {
+					fmt.Println("ClickHouse was unreachable for prompt-only turns -- Cursor/Copilot/Codex/OpenCode turns could not be read this run, so only Claude Code transcripts were included.")
 				}
 			}
 			return nil
@@ -186,10 +194,16 @@ func memoryDisconnectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			_, statErr := os.Stat(path)
+			existed := statErr == nil
 			if err := memory.DeleteCredentials(); err != nil {
 				return err
 			}
-			fmt.Printf("Removed %s. Memories already pushed to AnonaMemory are untouched.\n", path)
+			if existed {
+				fmt.Printf("Removed %s. Memories already pushed to AnonaMemory are untouched.\n", path)
+			} else {
+				fmt.Printf("No local config at %s -- nothing to remove.\n", path)
+			}
 			return nil
 		},
 	}
