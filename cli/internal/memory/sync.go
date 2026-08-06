@@ -56,10 +56,25 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 		since = *opts.Since
 	}
 
+	// Sources are queried from a point dedupWindow earlier than since, not
+	// since itself. Sources have very different latencies -- a transcript
+	// line lands on disk instantly, the equivalent hook-shim span reaches
+	// ClickHouse only after OTLP batching plus insert -- so a strict
+	// since cutoff permanently loses anything that was still in flight when
+	// the watermark last advanced. Re-reading the trailing window and
+	// relying on Credentials.Seen to reject what was already pushed is what
+	// makes that window (and RecentTurns) do anything at all. A zero since
+	// means "never synced" and must stay zero -- subtracting from it would
+	// produce a non-zero time.Time that accidentally starts filtering.
+	queryFrom := since
+	if !since.IsZero() {
+		queryFrom = since.Add(-dedupWindow)
+	}
+
 	var candidates []Turn
 
 	for _, source := range sources {
-		turns, skipped, err := source.Turns(since)
+		turns, skipped, err := source.Turns(queryFrom)
 		if err != nil {
 			return result, err
 		}
@@ -68,7 +83,7 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 	}
 
 	if enricher != nil {
-		promptOnly, skipped, err := enricher.PromptOnlyTurns(since)
+		promptOnly, skipped, err := enricher.PromptOnlyTurns(queryFrom)
 		if err != nil {
 			// Only count skipped rows for a call that actually succeeded --
 			// an Enricher that errors is not guaranteed to report a
@@ -83,7 +98,7 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 
 	var stats map[string]SessionStats
 	if enricher != nil {
-		s, skipped, err := enricher.SessionStats(since)
+		s, skipped, err := enricher.SessionStats(queryFrom)
 		if err != nil {
 			result.EnrichErr = err
 		} else {
@@ -136,8 +151,31 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 
 	accepted, err := rec.RecordBatch(creds.SpaceID, items)
 	if err != nil {
-		// Leave the watermark alone so the next run retries these turns.
 		result.Pushed = accepted
+		// RecordBatch writes in chunks of up to 100 and returns how many
+		// items landed before the failing chunk. selected is sorted oldest
+		// first (see above), so items[:accepted] is exactly the contiguous
+		// prefix the server already accepted. Advancing the watermark and
+		// RecentTurns over that prefix -- even though the overall call is
+		// erroring -- is what stops the next run from re-pushing chunks
+		// that already succeeded; nothing after it is marked, so the next
+		// run naturally retries from the failure point. This is safe only
+		// because since is now queried with a trailing lookback (see
+		// above): re-marking a turn "seen" here doesn't risk losing it if a
+		// slower source's copy of the same turn shows up later.
+		if accepted > len(selected) {
+			// Defensive only -- a well-behaved Recorder never accepts more
+			// than it was given -- but slicing past len(selected) would
+			// panic, and this is watermark-advancing code that must not.
+			accepted = len(selected)
+		}
+		if accepted > 0 {
+			acceptedSynced := make(map[string]time.Time, accepted)
+			for _, turn := range selected[:accepted] {
+				acceptedSynced[turn.TurnID] = turn.Timestamp
+			}
+			creds.MarkSynced(acceptedSynced)
+		}
 		return result, err
 	}
 
