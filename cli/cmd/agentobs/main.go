@@ -22,6 +22,7 @@ func main() {
 	root.AddCommand(commands.CursorHookCmd())
 	root.AddCommand(commands.AgentsCmd())
 	root.AddCommand(commands.ConfigAlertsCmd())
+	root.AddCommand(commands.MemoryCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
