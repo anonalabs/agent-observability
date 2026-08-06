@@ -22,9 +22,12 @@ func TestPromptOnlyTurnsExcludesClaudeCodeAndMaskedPrompts(t *testing.T) {
 	defer srv.Close()
 
 	ch := ClickHouse{BaseURL: srv.URL, HTTP: srv.Client()}
-	turns, err := ch.PromptOnlyTurns(time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC))
+	turns, skipped, err := ch.PromptOnlyTurns(time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0", skipped)
 	}
 
 	if !strings.Contains(gotQuery, "claude-code") {
@@ -59,16 +62,41 @@ func TestPromptOnlyTurnsTurnIDIsStable(t *testing.T) {
 	defer srv.Close()
 
 	ch := ClickHouse{BaseURL: srv.URL, HTTP: srv.Client()}
-	first, err := ch.PromptOnlyTurns(time.Time{})
+	first, _, err := ch.PromptOnlyTurns(time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	second, err := ch.PromptOnlyTurns(time.Time{})
+	second, _, err := ch.PromptOnlyTurns(time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if first[0].TurnID != second[0].TurnID {
 		t.Errorf("turn id must be deterministic: %q vs %q", first[0].TurnID, second[0].TurnID)
+	}
+}
+
+func TestPromptOnlyTurnsCountsUnparseableTimestamps(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, strings.Join([]string{
+			`{"ts":"not-a-timestamp","agent":"cursor-agent","prompt":"refactor this","session":"sess-9","model":"","cwd":""}`,
+			`{"ts":"2026-08-06 12:05:00.000000000","agent":"gemini-cli","prompt":"explain","session":"sess-10","model":"","cwd":""}`,
+		}, "\n"))
+	}))
+	defer srv.Close()
+
+	ch := ClickHouse{BaseURL: srv.URL, HTTP: srv.Client()}
+	turns, skipped, err := ch.PromptOnlyTurns(time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1", skipped)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("got %d turns, want 1", len(turns))
+	}
+	if turns[0].SessionID != "sess-10" {
+		t.Errorf("turn 0 = %+v, want the row with a valid timestamp", turns[0])
 	}
 }
 
@@ -82,9 +110,12 @@ func TestSessionStatsAggregatesBySession(t *testing.T) {
 	defer srv.Close()
 
 	ch := ClickHouse{BaseURL: srv.URL, HTTP: srv.Client()}
-	stats, err := ch.SessionStats(time.Time{})
+	stats, skipped, err := ch.SessionStats(time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0", skipped)
 	}
 
 	if len(stats) != 2 {
@@ -92,6 +123,36 @@ func TestSessionStatsAggregatesBySession(t *testing.T) {
 	}
 	if stats["sess-1"].CostUSD != 0.04 {
 		t.Errorf("sess-1 cost = %v, want 0.04", stats["sess-1"].CostUSD)
+	}
+	if stats["sess-1"].InputTokens != 300 || stats["sess-1"].OutputTokens != 120 {
+		t.Errorf("sess-1 tokens = %+v", stats["sess-1"])
+	}
+}
+
+func TestSessionStatsCountsUnparseableNumbers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, strings.Join([]string{
+			`{"session":"sess-1","cost":"not-a-number","input_tokens":"300","output_tokens":"120"}`,
+			`{"session":"sess-2","cost":"0.0100","input_tokens":"50","output_tokens":"20"}`,
+		}, "\n"))
+	}))
+	defer srv.Close()
+
+	ch := ClickHouse{BaseURL: srv.URL, HTTP: srv.Client()}
+	stats, skipped, err := ch.SessionStats(time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1", skipped)
+	}
+	// The row is kept, with the unparseable field defaulting to zero, rather
+	// than dropping the whole session's stats.
+	if len(stats) != 2 {
+		t.Fatalf("got %d sessions, want 2", len(stats))
+	}
+	if stats["sess-1"].CostUSD != 0 {
+		t.Errorf("sess-1 cost = %v, want 0", stats["sess-1"].CostUSD)
 	}
 	if stats["sess-1"].InputTokens != 300 || stats["sess-1"].OutputTokens != 120 {
 		t.Errorf("sess-1 tokens = %+v", stats["sess-1"])
@@ -106,7 +167,7 @@ func TestClickHouseErrorsSurfaceStatus(t *testing.T) {
 	defer srv.Close()
 
 	ch := ClickHouse{BaseURL: srv.URL, HTTP: srv.Client()}
-	if _, err := ch.SessionStats(time.Time{}); err == nil {
+	if _, _, err := ch.SessionStats(time.Time{}); err == nil {
 		t.Fatal("expected an error, got nil")
 	}
 }

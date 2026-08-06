@@ -86,7 +86,14 @@ func promptTurnID(agent, session, timestamp, prompt string) string {
 // turns come from transcripts with real response text. Both otel_logs (the
 // native-OTel agents) and otel_traces (the hook-shim agents) are unioned,
 // mirroring how the leaderboard dashboard treats the two tables.
-func (ch ClickHouse) PromptOnlyTurns(since time.Time) ([]Turn, error) {
+//
+// The second return value counts rows whose ts didn't parse against
+// clickHouseTimeLayout and were dropped entirely, since a Turn without a
+// timestamp can't be represented. This package has no logger and must not
+// print (a later task owns user-facing output), so the count is the only
+// way a caller can notice that ClickHouse's DateTime64 rendering drifted
+// and rows are silently vanishing from every sync.
+func (ch ClickHouse) PromptOnlyTurns(since time.Time) ([]Turn, int, error) {
 	// The UNION ALL is wrapped in a subquery because ClickHouse binds a
 	// trailing ORDER BY to the last SELECT only, not to the union.
 	sql := fmt.Sprintf(`
@@ -124,13 +131,15 @@ FORMAT JSONEachRow`,
 
 	rows, err := ch.query(sql)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var turns []Turn
+	skipped := 0
 	for _, row := range rows {
 		timestamp, err := time.Parse(clickHouseTimeLayout, row["ts"])
 		if err != nil {
+			skipped++
 			continue
 		}
 		turns = append(turns, Turn{
@@ -143,12 +152,19 @@ FORMAT JSONEachRow`,
 			CWD:       row["cwd"],
 		})
 	}
-	return turns, nil
+	return turns, skipped, nil
 }
 
 // SessionStats sums cost and tokens per session from Claude Code's
 // api_request events, used to enrich turns that already have their text.
-func (ch ClickHouse) SessionStats(since time.Time) (map[string]SessionStats, error) {
+//
+// The second return value counts rows where cost, input_tokens, or
+// output_tokens failed to parse as numbers. Such a row is still kept in the
+// result (with the unparseable field defaulting to zero) rather than
+// dropping the whole session's stats, since a session with a wrong cost is
+// more useful than one silently missing altogether — but the count still
+// registers so a caller can surface that some enrichment data is suspect.
+func (ch ClickHouse) SessionStats(since time.Time) (map[string]SessionStats, int, error) {
 	sql := fmt.Sprintf(`
 SELECT
   LogAttributes['session.id'] AS session,
@@ -164,19 +180,23 @@ FORMAT JSONEachRow`, sinceClause("Timestamp", since))
 
 	rows, err := ch.query(sql)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	stats := map[string]SessionStats{}
+	skipped := 0
 	for _, row := range rows {
-		cost, _ := strconv.ParseFloat(row["cost"], 64)
-		input, _ := strconv.Atoi(row["input_tokens"])
-		output, _ := strconv.Atoi(row["output_tokens"])
+		cost, costErr := strconv.ParseFloat(row["cost"], 64)
+		input, inputErr := strconv.Atoi(row["input_tokens"])
+		output, outputErr := strconv.Atoi(row["output_tokens"])
+		if costErr != nil || inputErr != nil || outputErr != nil {
+			skipped++
+		}
 		stats[row["session"]] = SessionStats{
 			CostUSD:      cost,
 			InputTokens:  input,
 			OutputTokens: output,
 		}
 	}
-	return stats, nil
+	return stats, skipped, nil
 }
