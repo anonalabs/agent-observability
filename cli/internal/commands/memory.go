@@ -91,40 +91,49 @@ func memorySyncCmd() *cobra.Command {
 				return syncErr
 			}
 
+			// --quiet is the configuration the wizard prints into every
+			// user's crontab, so it must not be able to hide a problem --
+			// only the routine "it worked" line is conditional on it.
+			// Everything below reports a degradation or a non-zero skip
+			// count and always prints, to stderr, so cron's default
+			// "mail me anything the job wrote" behavior still surfaces it
+			// even on a --quiet run.
 			if !quiet {
 				verb := "Pushed"
 				if dryRun {
 					verb = "Would push"
 				}
 				fmt.Printf("%s %d turns to space %s.\n", verb, result.Pushed, creds.SpaceName)
-				if result.Deduped > 0 {
-					fmt.Printf("Skipped %d already-synced turns.\n", result.Deduped)
+			}
+
+			warn := cmd.ErrOrStderr()
+			if result.Deduped > 0 {
+				fmt.Fprintf(warn, "Skipped %d already-synced turns.\n", result.Deduped)
+			}
+			if result.Filtered > 0 {
+				fmt.Fprintf(warn, "Skipped %d turns outside the project allowlist.\n", result.Filtered)
+			}
+			if result.SkippedFiles > 0 {
+				fmt.Fprintf(warn, "Skipped %d unreadable transcript files -- recovered automatically next run if the file becomes readable within the 24h lookback window, otherwise permanently missed. Investigate if this persists.\n", result.SkippedFiles)
+			}
+			if result.SkippedRows > 0 {
+				fmt.Fprintf(warn, "ClickHouse returned %d rows that could not be read (bad timestamp or cost) -- unlike a transcript read failure, a malformed row doesn't fix itself on retry, so investigate rather than wait it out.\n", result.SkippedRows)
+			}
+			if result.EnrichErr != nil && result.Pushed > 0 {
+				verb := "went out"
+				if dryRun {
+					verb = "would go out"
 				}
-				if result.Filtered > 0 {
-					fmt.Printf("Skipped %d turns outside the project allowlist.\n", result.Filtered)
-				}
-				if result.SkippedFiles > 0 {
-					fmt.Printf("Skipped %d unreadable transcript files.\n", result.SkippedFiles)
-				}
-				if result.SkippedRows > 0 {
-					fmt.Printf("ClickHouse returned %d rows that could not be read (bad timestamp or cost) -- those turns' data isn't lost, just missing from this sync.\n", result.SkippedRows)
-				}
-				if result.EnrichErr != nil && result.Pushed > 0 {
-					verb := "went out"
-					if dryRun {
-						verb = "would go out"
-					}
-					fmt.Printf("ClickHouse was unreachable for cost/token enrichment -- turns %s without that context.\n", verb)
-				}
-				if result.PromptOnlyErr != nil {
-					fmt.Println("ClickHouse was unreachable for prompt-only turns -- Cursor/Copilot/Codex/OpenCode turns could not be read this run, so only Claude Code transcripts were included.")
-				}
+				fmt.Fprintf(warn, "ClickHouse was unreachable for cost/token enrichment -- turns %s without that context.\n", verb)
+			}
+			if result.PromptOnlyErr != nil {
+				fmt.Fprintln(warn, "ClickHouse was unreachable for prompt-only turns -- Cursor/OpenCode turns could not be read this run, so only Claude Code transcripts were included.")
 			}
 			return nil
 		},
 	}
 
-	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress the summary (for cron)")
+	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress the routine success line (for cron); warnings and non-zero skip counts still print, to stderr")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would be pushed without pushing or advancing the watermark")
 	cmd.Flags().StringVar(&since, "since", "", "override the watermark, e.g. 24h or 7d")
 
