@@ -41,6 +41,20 @@ type Turn struct {
 
 func (t Turn) HasResponse() bool { return t.Response != "" }
 
+// maxContentChars caps RecordItem's content field. The telemetry path
+// already truncates prompts at 5000 chars and tool output at 10000
+// (cursorhook/event_attributes.go's beforeSubmitPrompt and
+// preToolUse/postToolUse cases); nothing bounded the transcript path, and
+// Claude Code prompts routinely carry large pasted files. An oversized item
+// gets a non-retryable 4xx from AnonaMemory's body limit, which aborts
+// RecordBatch entirely -- the watermark never advances, so every later sync
+// retries the identical oversized batch forever. 20,000 characters is
+// generous for a real prompt+response exchange (well beyond the combined
+// 15,000 the telemetry path already allows per turn) while keeping one
+// item, and so a 100-item batch, comfortably under typical request-body
+// limits. See docs/anonamemory.md.
+const maxContentChars = 20000
+
 // MaskText redacts home-directory usernames and email addresses in free
 // text, reusing cursorhook's path patterns so both paths behave the same.
 func MaskText(s string) string {
@@ -152,6 +166,9 @@ func (t Turn) RecordItem() RecordItem {
 	content := "User: " + t.Prompt
 	if t.HasResponse() {
 		content += "\n\nAssistant: " + t.Response
+	}
+	if len(content) > maxContentChars {
+		content = content[:maxContentChars] + "... (truncated)"
 	}
 
 	var contextParts []string

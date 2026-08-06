@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -210,6 +211,48 @@ func TestRecordItemWithResponse(t *testing.T) {
 	}
 	if item.Metadata["cost_usd"] != 0.02 {
 		t.Errorf("cost_usd = %v", item.Metadata["cost_usd"])
+	}
+}
+
+// TestRecordItemTruncatesOversizedContent is finding I3's regression test.
+// Without a cap, a turn whose prompt contains a large pasted file produces
+// a batch item that can exceed AnonaMemory's body limit -- a non-retryable
+// 4xx that aborts RecordBatch, leaves the watermark unmoved, and wedges the
+// connector into retrying the same oversized batch on every subsequent
+// sync forever.
+func TestRecordItemTruncatesOversizedContent(t *testing.T) {
+	turn := Turn{
+		Agent:     "claude-code",
+		SessionID: "sess-1",
+		TurnID:    "turn-1",
+		Timestamp: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC),
+		Prompt:    strings.Repeat("x", maxContentChars+5000),
+		Response:  "done",
+	}
+
+	item := turn.RecordItem()
+
+	if len(item.Content) != maxContentChars+len("... (truncated)") {
+		t.Fatalf("content length = %d, want the cap plus the marker", len(item.Content))
+	}
+	if !strings.HasSuffix(item.Content, "... (truncated)") {
+		t.Errorf("content = %q, want it to end with the truncation marker", item.Content[len(item.Content)-30:])
+	}
+	if len(item.Content) > maxContentChars+len("... (truncated)") {
+		t.Errorf("content exceeds the cap: %d chars", len(item.Content))
+	}
+}
+
+func TestRecordItemUnderCapIsNotTruncated(t *testing.T) {
+	turn := Turn{
+		Prompt:   "a short prompt",
+		Response: "a short response",
+	}
+
+	item := turn.RecordItem()
+
+	if strings.Contains(item.Content, "truncated") {
+		t.Errorf("content = %q, a short turn should not be marked truncated", item.Content)
 	}
 }
 
