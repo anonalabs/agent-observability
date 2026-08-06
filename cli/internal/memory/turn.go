@@ -141,6 +141,7 @@ func (t Turn) Masked() Turn {
 	t.Prompt = MaskText(t.Prompt)
 	t.Response = MaskText(t.Response)
 	t.CWD = MaskText(t.CWD)
+	t.GitBranch = MaskText(t.GitBranch)
 	return t
 }
 

@@ -142,11 +142,12 @@ func TestMaskText(t *testing.T) {
 	}
 }
 
-func TestMaskedAppliesToPromptResponseAndCWD(t *testing.T) {
+func TestMaskedAppliesToPromptResponseCWDAndGitBranch(t *testing.T) {
 	turn := Turn{
-		Prompt:   "fix /home/srujan/app.go",
-		Response: "done, mailed alice@example.com",
-		CWD:      "/home/srujan/app",
+		Prompt:    "fix /home/srujan/app.go",
+		Response:  "done, mailed alice@example.com",
+		CWD:       "/home/srujan/app",
+		GitBranch: "wip-/home/bob/personal-branch",
 	}
 
 	got := turn.Masked()
@@ -159,6 +160,9 @@ func TestMaskedAppliesToPromptResponseAndCWD(t *testing.T) {
 	}
 	if got.CWD != "/home/[USER]/app" {
 		t.Errorf("cwd = %q", got.CWD)
+	}
+	if got.GitBranch != "wip-/home/[USER]/personal-branch" {
+		t.Errorf("git branch = %q", got.GitBranch)
 	}
 }
 

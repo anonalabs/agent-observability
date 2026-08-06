@@ -2,6 +2,7 @@ package memory
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -218,6 +219,24 @@ func TestSyncCountsSkippedFiles(t *testing.T) {
 	}
 	if result.SkippedFiles != 3 {
 		t.Errorf("skipped files = %d, want 3", result.SkippedFiles)
+	}
+}
+
+func TestSyncMasksGitBranch(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	rec := &fakeRecorder{}
+	turn := turnAt("t1", "/home/dev/repo", now)
+	turn.GitBranch = "wip-/home/bob/personal-branch"
+
+	if _, err := Sync(creds, rec, []TranscriptSource{fakeSource{turns: []Turn{turn}}}, fakeEnricher{}, Options{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(rec.items[0].Context, "bob") {
+		t.Errorf("context = %q, want the git branch masked", rec.items[0].Context)
+	}
+	if branch, _ := rec.items[0].Metadata["git_branch"].(string); strings.Contains(branch, "bob") {
+		t.Errorf("metadata git_branch = %q, want it masked", branch)
 	}
 }
 

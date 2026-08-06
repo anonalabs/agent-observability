@@ -69,10 +69,14 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 
 	if enricher != nil {
 		promptOnly, skipped, err := enricher.PromptOnlyTurns(since)
-		result.SkippedRows += skipped
 		if err != nil {
+			// Only count skipped rows for a call that actually succeeded --
+			// an Enricher that errors is not guaranteed to report a
+			// meaningful skipped count alongside that error, so folding it
+			// in here could corrupt the total.
 			result.PromptOnlyErr = err
 		} else {
+			result.SkippedRows += skipped
 			candidates = append(candidates, promptOnly...)
 		}
 	}
@@ -80,10 +84,10 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 	var stats map[string]SessionStats
 	if enricher != nil {
 		s, skipped, err := enricher.SessionStats(since)
-		result.SkippedRows += skipped
 		if err != nil {
 			result.EnrichErr = err
 		} else {
+			result.SkippedRows += skipped
 			stats = s
 		}
 	}
