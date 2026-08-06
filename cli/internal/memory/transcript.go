@@ -133,6 +133,20 @@ func (s ClaudeCodeSource) turnsFromFile(path string, since time.Time) ([]Turn, e
 	// timestamp always trace back to one line in the transcript rather
 	// than two different ones, and re-parsing the same file always
 	// produces the same id for the same accumulated turn.
+	//
+	// Consequence: an exchange still being written when a sync runs gets a
+	// turn_id keyed to whatever its last text message is *at that moment*.
+	// If the assistant later adds more text to the same exchange (the file
+	// is still open, e.g. a long tool-using response spanning several
+	// sync intervals), the next sync sees a *different* last text-bearing
+	// message and therefore a new turn_id -- so that exchange is pushed
+	// again, as a new record with a fuller Response, rather than updating
+	// the earlier one in place. This is intentional, not a bug: a turn_id
+	// fixed at the exchange's first message would dedup away every later,
+	// more-complete version, and the finished answer would never be sent.
+	// The tradeoff is near-duplicate partial records for anything still in
+	// progress when a sync fires -- routine with hourly cron and a long
+	// session, not an edge case. See docs/anonamemory.md.
 	var lastTurnID string
 	var lastTimestamp time.Time
 	var lastModel string

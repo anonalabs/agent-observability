@@ -138,7 +138,7 @@ func memorySyncCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress the routine success line (for cron); warnings and non-zero skip counts still print, to stderr")
+	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress the routine success line (for cron); degradation warnings and unreadable-input counts still print, to stderr")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would be pushed without pushing or advancing the watermark")
 	cmd.Flags().StringVar(&since, "since", "", "override the watermark, e.g. 24h or 7d")
 
