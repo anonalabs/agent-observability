@@ -71,14 +71,25 @@ func SaveCredentials(c *Credentials) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// MkdirAll/WriteFile only apply the given mode when they create the
+	// path; if it already existed with looser permissions, that would
+	// silently persist. Re-assert both modes on every save so the 0600
+	// invariant holds even for a file created outside SaveCredentials.
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func DeleteCredentials() error {

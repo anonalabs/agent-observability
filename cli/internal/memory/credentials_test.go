@@ -33,6 +33,40 @@ func TestSaveCredentialsUsesOwnerOnlyPermissions(t *testing.T) {
 	}
 }
 
+func TestSaveCredentialsTightensExistingLoosePermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested")
+	path := filepath.Join(dir, "memory.json")
+	t.Setenv("AGENTOBS_MEMORY_CONFIG", path)
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	err := SaveCredentials(&Credentials{APIKey: "anona_live_x", SpaceID: "spc_a1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("file mode = %o, want 600", got)
+	}
+
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0o700 {
+		t.Errorf("dir mode = %o, want 700", got)
+	}
+}
+
 func TestLoadCredentialsRoundTrips(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.json")
 	t.Setenv("AGENTOBS_MEMORY_CONFIG", path)
