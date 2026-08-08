@@ -206,11 +206,13 @@ func TestRecordItemWithResponse(t *testing.T) {
 	if item.Metadata["agent_id"] != "claude-code" {
 		t.Errorf("agent_id = %v", item.Metadata["agent_id"])
 	}
-	if item.Metadata["has_response"] != true {
-		t.Errorf("has_response = %v, want true", item.Metadata["has_response"])
+	// Every metadata value must be a string -- the live API 422s on a
+	// number, bool, or array anywhere in this map.
+	if item.Metadata["has_response"] != "true" {
+		t.Errorf("has_response = %#v, want the string \"true\"", item.Metadata["has_response"])
 	}
-	if item.Metadata["cost_usd"] != 0.02 {
-		t.Errorf("cost_usd = %v", item.Metadata["cost_usd"])
+	if item.Metadata["cost_usd"] != "0.02" {
+		t.Errorf("cost_usd = %#v, want the string \"0.02\"", item.Metadata["cost_usd"])
 	}
 }
 
@@ -271,7 +273,7 @@ func TestRecordItemPromptOnly(t *testing.T) {
 	if item.Content != "User: refactor this" {
 		t.Errorf("content = %q, want the prompt with no Assistant section", item.Content)
 	}
-	if item.Metadata["has_response"] != false {
-		t.Errorf("has_response = %v, want false", item.Metadata["has_response"])
+	if item.Metadata["has_response"] != "false" {
+		t.Errorf("has_response = %#v, want the string \"false\"", item.Metadata["has_response"])
 	}
 }

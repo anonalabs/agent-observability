@@ -16,6 +16,13 @@ import (
 // https://memory.anonalabs.com as a legacy alternative.
 const DefaultBaseURL = "https://api.anonalabs.com"
 
+// spacesPath needs its trailing slash. The deployed API answers
+// /v1/spaces with 307 -> http://api.anonalabs.com/v1/spaces/ , which both
+// downgrades to plaintext and loses the POST body (the create then fails
+// with "Field required"). Addressing the canonical path avoids the redirect
+// entirely. /v1/record/batch is served directly and takes no trailing slash.
+const spacesPath = "/v1/spaces/"
+
 // maxBatchItems is the API's hard limit on /v1/record/batch.
 const maxBatchItems = 100
 
@@ -40,13 +47,37 @@ type RecordItem struct {
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// APIError is AnonaMemory's documented error envelope. RequestID is what
-// their support asks for, so it must survive to the user's terminal.
+// APIError is AnonaMemory's error envelope. RequestID is what their support
+// asks for, so it must survive to the user's terminal.
+//
+// The live API nests the fields under an "error" key --
+// {"error":{"code":...,"message":...,"request_id":...}} -- even though the
+// published docs describe them at the top level. Both shapes are decoded, so
+// a flat envelope keeps working if the API is ever changed to match its docs.
 type APIError struct {
 	Status    int    `json:"-"`
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	RequestID string `json:"request_id"`
+}
+
+// errorEnvelope is the nested shape the deployed API actually returns.
+type errorEnvelope struct {
+	Error *APIError `json:"error"`
+}
+
+// decodeAPIError fills e from body, accepting either the nested or the flat
+// envelope. A body that is neither (a proxy error page, say) leaves the
+// fields empty rather than masking the status code.
+func decodeAPIError(body []byte, e *APIError) {
+	var nested errorEnvelope
+	if err := json.Unmarshal(body, &nested); err == nil && nested.Error != nil {
+		e.Code = nested.Error.Code
+		e.Message = nested.Error.Message
+		e.RequestID = nested.Error.RequestID
+		return
+	}
+	_ = json.Unmarshal(body, e)
 }
 
 func (e *APIError) Error() string {
@@ -73,9 +104,31 @@ func NewClient(apiKey string) *Client {
 	return &Client{
 		BaseURL: DefaultBaseURL,
 		APIKey:  apiKey,
-		HTTP:    &http.Client{Timeout: 30 * time.Second},
-		Sleep:   time.Sleep,
+		HTTP: &http.Client{
+			Timeout:       30 * time.Second,
+			CheckRedirect: refuseInsecureRedirect,
+		},
+		Sleep: time.Sleep,
 	}
+}
+
+// refuseInsecureRedirect blocks any redirect that would downgrade an HTTPS
+// request to plaintext HTTP. The deployed API answers a slashless collection
+// URL with 307 -> http://... , and following that would put the bearer token
+// on the wire unencrypted. Requests are made against the exact paths the API
+// serves so this should never fire; it exists so a future redirect cannot
+// silently leak the key.
+func refuseInsecureRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return fmt.Errorf(
+			"refusing redirect from %s to %s: it would send the API key over plaintext HTTP",
+			via[0].URL.Scheme, req.URL.Scheme,
+		)
+	}
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	return nil
 }
 
 // do issues one request with exponential backoff plus jitter on retryable
@@ -125,9 +178,7 @@ func (c *Client) do(method, path string, payload interface{}, out interface{}) e
 
 		if resp.StatusCode >= 400 {
 			apiErr := &APIError{Status: resp.StatusCode}
-			// A non-JSON body (proxy error page, gateway timeout) leaves the
-			// envelope fields empty rather than masking the status code.
-			_ = json.Unmarshal(respBody, apiErr)
+			decodeAPIError(respBody, apiErr)
 			if !retryable(resp.StatusCode) {
 				return apiErr
 			}
@@ -149,7 +200,7 @@ func (c *Client) ListSpaces() ([]Space, error) {
 		Spaces []Space `json:"spaces"`
 		Total  int     `json:"total"`
 	}
-	if err := c.do(http.MethodGet, "/v1/spaces", nil, &out); err != nil {
+	if err := c.do(http.MethodGet, spacesPath, nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Spaces, nil
@@ -161,7 +212,7 @@ func (c *Client) CreateSpace(name, description string) (Space, error) {
 		payload["description"] = description
 	}
 	var space Space
-	if err := c.do(http.MethodPost, "/v1/spaces", payload, &space); err != nil {
+	if err := c.do(http.MethodPost, spacesPath, payload, &space); err != nil {
 		return Space{}, err
 	}
 	return space, nil

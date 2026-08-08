@@ -171,8 +171,9 @@ func TestSyncEnrichesFromSessionStats(t *testing.T) {
 	if _, err := Sync(creds, rec, []TranscriptSource{src}, enricher, Options{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if rec.items[0].Metadata["cost_usd"] != 0.25 {
-		t.Errorf("cost_usd = %v, want 0.25", rec.items[0].Metadata["cost_usd"])
+	// Metadata values are strings -- the live API rejects numeric values.
+	if rec.items[0].Metadata["cost_usd"] != "0.25" {
+		t.Errorf("cost_usd = %#v, want the string \"0.25\"", rec.items[0].Metadata["cost_usd"])
 	}
 }
 

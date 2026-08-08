@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -33,8 +34,10 @@ func TestListSpacesSendsBearerHeader(t *testing.T) {
 	if gotAuth != "Bearer anona_live_testkey" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer anona_live_testkey")
 	}
-	if gotPath != "/v1/spaces" {
-		t.Errorf("path = %q, want /v1/spaces", gotPath)
+	// The trailing slash is required: the deployed API answers the slashless
+	// path with a 307 to plaintext http:// that also loses a POST body.
+	if gotPath != "/v1/spaces/" {
+		t.Errorf("path = %q, want /v1/spaces/", gotPath)
 	}
 	if len(spaces) != 1 || spaces[0].SpaceID != "spc_a1" || spaces[0].Name != "work" {
 		t.Fatalf("spaces = %+v", spaces)
@@ -172,4 +175,65 @@ func TestRecordBatchEmptyIsNoop(t *testing.T) {
 	if accepted != 0 {
 		t.Errorf("accepted = %d, want 0", accepted)
 	}
+}
+
+// The deployed API nests its error fields under an "error" key, unlike the
+// published docs which show them at the top level. Both must decode, or the
+// user sees an empty "HTTP 422 : (request_id )".
+func TestAPIErrorDecodesNestedAndFlatEnvelopes(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"nested (what the live API returns)", `{"error":{"code":"validation_error","message":"Field required","request_id":"req_9"}}`},
+		{"flat (what the docs describe)", `{"code":"validation_error","message":"Field required","request_id":"req_9"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				io.WriteString(w, tt.body)
+			}))
+			defer srv.Close()
+
+			_, err := testClient(srv).CreateSpace("x", "")
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			apiErr, ok := err.(*APIError)
+			if !ok {
+				t.Fatalf("expected *APIError, got %T: %v", err, err)
+			}
+			if apiErr.Code != "validation_error" || apiErr.Message != "Field required" || apiErr.RequestID != "req_9" {
+				t.Errorf("decoded = %+v, want code/message/request_id populated", apiErr)
+			}
+		})
+	}
+}
+
+// A redirect downgrading https -> http would put the bearer token on the wire
+// in plaintext. The live API emits exactly such a redirect for a slashless
+// collection path, so it must be refused rather than followed.
+func TestRefusesHTTPSToHTTPDowngradeRedirect(t *testing.T) {
+	https := &http.Request{URL: mustURL(t, "https://api.example.com/v1/spaces")}
+
+	plain := &http.Request{URL: mustURL(t, "http://api.example.com/v1/spaces/")}
+	if err := refuseInsecureRedirect(plain, []*http.Request{https}); err == nil {
+		t.Error("expected https -> http redirect to be refused")
+	}
+
+	secure := &http.Request{URL: mustURL(t, "https://api.example.com/v1/spaces/")}
+	if err := refuseInsecureRedirect(secure, []*http.Request{https}); err != nil {
+		t.Errorf("https -> https redirect should be allowed, got %v", err)
+	}
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parsing %q: %v", raw, err)
+	}
+	return u
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -183,19 +184,25 @@ func (t Turn) RecordItem() RecordItem {
 		contextParts = append(contextParts, t.Model)
 	}
 
+	// Every metadata value must be a string. The live API rejects a number,
+	// boolean, or array anywhere in this map with
+	// 422 memory_error "Invalid request to the memory service" -- verified by
+	// bisecting the field types against the real endpoint. Numbers are
+	// therefore formatted, the bool is rendered "true"/"false", and the tool
+	// list is comma-joined.
 	metadata := map[string]interface{}{
 		"turn_id":       t.TurnID,
 		"session_id":    t.SessionID,
 		"agent_id":      t.Agent,
-		"has_response":  t.HasResponse(),
-		"input_tokens":  t.InputTokens,
-		"output_tokens": t.OutputTokens,
-		"cost_usd":      t.CostUSD,
+		"has_response":  strconv.FormatBool(t.HasResponse()),
+		"input_tokens":  strconv.Itoa(t.InputTokens),
+		"output_tokens": strconv.Itoa(t.OutputTokens),
+		"cost_usd":      strconv.FormatFloat(t.CostUSD, 'f', -1, 64),
 		"cwd":           t.CWD,
 		"git_branch":    t.GitBranch,
 	}
 	if len(t.Tools) > 0 {
-		metadata["tools"] = t.Tools
+		metadata["tools"] = strings.Join(t.Tools, ",")
 	}
 
 	return RecordItem{
