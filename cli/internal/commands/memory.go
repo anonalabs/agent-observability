@@ -51,23 +51,35 @@ func MemoryCmd() *cobra.Command {
 // stdout and is suppressed by --quiet; degradations go to stderr regardless,
 // because the cron line the wizard prints uses --quiet and a silently
 // degraded sync is worse than a noisy one.
-func reportResult(cmd *cobra.Command, path string, result memory.Result, dryRun bool) {
-	verb := "Pushed"
-	if dryRun {
-		verb = "Would push"
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%s: %s %d turns.\n", path, verb, result.Pushed)
-	if result.Deduped > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s: skipped %d already-synced turns.\n", path, result.Deduped)
-	}
-	if result.Filtered > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s: skipped %d turns outside this project.\n", path, result.Filtered)
+func reportResult(cmd *cobra.Command, path string, result memory.Result, dryRun, quiet bool) {
+	if !quiet {
+		verb := "Pushed"
+		if dryRun {
+			verb = "Would push"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s: %s %d turns.\n", path, verb, result.Pushed)
+		if result.Deduped > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: skipped %d already-synced turns.\n", path, result.Deduped)
+		}
+		if result.Filtered > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: skipped %d turns outside this project.\n", path, result.Filtered)
+		}
 	}
 	if result.SkippedFiles > 0 {
 		fmt.Fprintf(cmd.ErrOrStderr(), "%s: skipped %d unreadable transcript files.\n", path, result.SkippedFiles)
 	}
 	if result.SkippedRows > 0 {
 		fmt.Fprintf(cmd.ErrOrStderr(), "%s: ClickHouse returned %d rows that could not be read.\n", path, result.SkippedRows)
+	}
+	if result.EnrichErr != nil && result.Pushed > 0 {
+		verb := "went out"
+		if dryRun {
+			verb = "would go out"
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "%s: ClickHouse was unreachable for cost/token enrichment -- turns %s without that context.\n", path, verb)
+	}
+	if result.PromptOnlyErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "%s: ClickHouse was unreachable for prompt-only turns -- Cursor turns could not be read this run, so only Claude Code transcripts were included.\n", path)
 	}
 	if result.SyncErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "%s: sync failed: %v\n", path, result.SyncErr)
@@ -114,9 +126,7 @@ func memorySyncCmd() *cobra.Command {
 						return saveErr
 					}
 				}
-				if !quiet {
-					reportResult(cmd, p.Path, result, dryRun)
-				}
+				reportResult(cmd, p.Path, result, dryRun, quiet)
 				return err
 			}
 
@@ -134,10 +144,8 @@ func memorySyncCmd() *cobra.Command {
 				}
 			}
 
-			if !quiet {
-				for path, result := range results {
-					reportResult(cmd, path, result, dryRun)
-				}
+			for path, result := range results {
+				reportResult(cmd, path, result, dryRun, quiet)
 			}
 			return syncErr
 		},
