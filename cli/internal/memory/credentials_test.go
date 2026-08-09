@@ -208,11 +208,17 @@ func TestLoadCredentialsLeavesV2Alone(t *testing.T) {
 	t.Setenv("AGENTOBS_MEMORY_CONFIG", path)
 
 	when := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
+	turnSeen := time.Date(2026, 8, 8, 8, 30, 0, 0, time.UTC)
 	if err := SaveCredentials(&Credentials{
 		Version: configVersion,
 		APIKey:  "k",
 		Projects: []Project{
-			{Path: "/home/dev/repo", SpaceID: "repo-space", Watermark: when},
+			{
+				Path:        "/home/dev/repo",
+				SpaceID:     "repo-space",
+				Watermark:   when,
+				RecentTurns: map[string]time.Time{"turn-1": turnSeen},
+			},
 		},
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -227,6 +233,15 @@ func TestLoadCredentialsLeavesV2Alone(t *testing.T) {
 	}
 	if !got.Projects[0].Watermark.Equal(when) {
 		t.Errorf("watermark = %v, want %v", got.Projects[0].Watermark, when)
+	}
+	// RecentTurns is the dedup set: if it silently failed to survive a real
+	// save/load round trip, every sync would re-push turns already sent to
+	// AnonaMemory. Assert against the reloaded value, not the struct we saved.
+	if !got.Projects[0].Seen("turn-1") {
+		t.Error("turn-1 should still be seen after a save/load round trip")
+	}
+	if reloaded := got.Projects[0].RecentTurns["turn-1"]; !reloaded.Equal(turnSeen) {
+		t.Errorf("recent_turns[turn-1] = %v, want %v", reloaded, turnSeen)
 	}
 	if _, err := os.Stat(path + ".bak"); err == nil {
 		t.Error("a v2 config must not be backed up -- nothing was migrated")
