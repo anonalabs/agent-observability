@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
+
+	"github.com/anonalabs/agent-observability/cli/internal/agents"
 )
 
 const signupURL = "https://docs.anonalabs.com/quickstart"
@@ -129,6 +131,20 @@ func runWizard(cwd string) error {
 	if promptOnlyErr != nil {
 		fmt.Println("ClickHouse was unreachable, so only Claude Code transcripts were read this run.")
 	}
+	autoSync := false
+	if err := survey.AskOne(&survey.Confirm{
+		Message: "Sync automatically when a Claude Code session ends?",
+		Default: true,
+	}, &autoSync); err == nil && autoSync {
+		path, err := agents.RegisterStopHook()
+		if err != nil {
+			fmt.Printf("Could not register the Stop hook: %v\n", err)
+			fmt.Println("Sync still works manually with `agentobs memory sync`.")
+		} else {
+			fmt.Printf("Registered a Stop hook in %s. New sessions sync when they end.\n", path)
+		}
+	}
+
 	fmt.Println()
 	fmt.Println("Keep it current with an hourly cron entry:")
 	fmt.Println("  0 * * * * agentobs memory sync --quiet")
