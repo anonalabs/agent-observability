@@ -97,14 +97,16 @@ func turnAt(id, cwd string, at time.Time) Turn {
 
 func TestSyncFiltersByProjectAllowlist(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	src := &fakeSource{turns: []Turn{
 		turnAt("in", "/home/dev/repo/cli", now),
 		turnAt("out", "/home/dev/elsewhere", now),
 	}}
 
-	result, err := Sync(creds, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{})
+	result, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, &fakeEnricher{}, Options{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,18 +123,16 @@ func TestSyncFiltersByProjectAllowlist(t *testing.T) {
 
 func TestSyncSkipsAlreadySeenTurns(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{
-		SpaceID:     "spc_a1",
-		Projects:    []string{"/home/dev/repo"},
-		RecentTurns: map[string]time.Time{"seen": now},
-	}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1", RecentTurns: map[string]time.Time{"seen": now}},
+	}}
 	rec := &fakeRecorder{}
 	src := &fakeSource{turns: []Turn{
 		turnAt("seen", "/home/dev/repo", now),
 		turnAt("fresh", "/home/dev/repo", now.Add(time.Minute)),
 	}}
 
-	result, err := Sync(creds, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{})
+	result, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, &fakeEnricher{}, Options{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,12 +146,14 @@ func TestSyncSkipsAlreadySeenTurns(t *testing.T) {
 
 func TestSyncMasksContent(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	turn := turnAt("t1", "/home/dev/repo", now)
 	turn.Prompt = "look at /home/dev/repo/main.go"
 
-	if _, err := Sync(creds, rec, []TranscriptSource{&fakeSource{turns: []Turn{turn}}}, &fakeEnricher{}, Options{}); err != nil {
+	if _, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{&fakeSource{turns: []Turn{turn}}}, &fakeEnricher{}, Options{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := rec.items[0].Content; got != "User: look at /home/[USER]/repo/main.go\n\nAssistant: done" {
@@ -161,14 +163,16 @@ func TestSyncMasksContent(t *testing.T) {
 
 func TestSyncEnrichesFromSessionStats(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	enricher := &fakeEnricher{stats: map[string]SessionStats{
 		"sess-1": {CostUSD: 0.25, InputTokens: 900, OutputTokens: 300},
 	}}
 
 	src := &fakeSource{turns: []Turn{turnAt("t1", "/home/dev/repo", now)}}
-	if _, err := Sync(creds, rec, []TranscriptSource{src}, enricher, Options{}); err != nil {
+	if _, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, enricher, Options{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Metadata values are strings -- the live API rejects numeric values.
@@ -179,7 +183,9 @@ func TestSyncEnrichesFromSessionStats(t *testing.T) {
 
 func TestSyncSurvivesEnricherFailure(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	enricher := &fakeEnricher{
 		statsErr:  errors.New("clickhouse down"),
@@ -187,7 +193,7 @@ func TestSyncSurvivesEnricherFailure(t *testing.T) {
 	}
 
 	src := &fakeSource{turns: []Turn{turnAt("t1", "/home/dev/repo", now)}}
-	result, err := Sync(creds, rec, []TranscriptSource{src}, enricher, Options{})
+	result, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, enricher, Options{})
 	if err != nil {
 		t.Fatalf("sync must degrade, not fail: %v", err)
 	}
@@ -201,11 +207,13 @@ func TestSyncSurvivesEnricherFailure(t *testing.T) {
 
 func TestSyncDryRunRecordsNothingAndLeavesWatermark(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	src := &fakeSource{turns: []Turn{turnAt("t1", "/home/dev/repo", now)}}
 
-	result, err := Sync(creds, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{DryRun: true})
+	result, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, &fakeEnricher{}, Options{DryRun: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -215,33 +223,37 @@ func TestSyncDryRunRecordsNothingAndLeavesWatermark(t *testing.T) {
 	if len(rec.items) != 0 {
 		t.Errorf("recorded %d items, want 0 on a dry run", len(rec.items))
 	}
-	if !creds.Watermark.IsZero() {
-		t.Errorf("watermark = %v, want it untouched on a dry run", creds.Watermark)
+	if !creds.Projects[0].Watermark.IsZero() {
+		t.Errorf("watermark = %v, want it untouched on a dry run", creds.Projects[0].Watermark)
 	}
 }
 
 func TestSyncDoesNotAdvanceWatermarkWhenRecordFails(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{err: errors.New("429 forever")}
 	src := &fakeSource{turns: []Turn{turnAt("t1", "/home/dev/repo", now)}}
 
-	if _, err := Sync(creds, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{}); err == nil {
+	if _, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, &fakeEnricher{}, Options{}); err == nil {
 		t.Fatal("expected the record failure to surface")
 	}
-	if !creds.Watermark.IsZero() {
-		t.Errorf("watermark = %v, want it unchanged after a failed write", creds.Watermark)
+	if !creds.Projects[0].Watermark.IsZero() {
+		t.Errorf("watermark = %v, want it unchanged after a failed write", creds.Projects[0].Watermark)
 	}
-	if creds.Seen("t1") {
+	if creds.Projects[0].Seen("t1") {
 		t.Error("a turn that failed to record must not be marked as seen")
 	}
 }
 
 func TestSyncCountsSkippedFiles(t *testing.T) {
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 
-	result, err := Sync(creds, rec, []TranscriptSource{&fakeSource{skipped: 3}}, &fakeEnricher{}, Options{})
+	result, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{&fakeSource{skipped: 3}}, &fakeEnricher{}, Options{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -252,12 +264,14 @@ func TestSyncCountsSkippedFiles(t *testing.T) {
 
 func TestSyncMasksGitBranch(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	turn := turnAt("t1", "/home/dev/repo", now)
 	turn.GitBranch = "wip-/home/bob/personal-branch"
 
-	if _, err := Sync(creds, rec, []TranscriptSource{&fakeSource{turns: []Turn{turn}}}, &fakeEnricher{}, Options{}); err != nil {
+	if _, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{&fakeSource{turns: []Turn{turn}}}, &fakeEnricher{}, Options{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if strings.Contains(rec.items[0].Context, "bob") {
@@ -270,12 +284,14 @@ func TestSyncMasksGitBranch(t *testing.T) {
 
 func TestSyncCountsSkippedRows(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	enricher := &fakeEnricher{promptSkipped: 2, statsSkipped: 5}
 
 	src := &fakeSource{turns: []Turn{turnAt("t1", "/home/dev/repo", now)}}
-	result, err := Sync(creds, rec, []TranscriptSource{src}, enricher, Options{})
+	result, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, enricher, Options{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -292,12 +308,14 @@ func TestSyncCountsSkippedRows(t *testing.T) {
 // dedup it.
 func TestSyncQueriesSourcesWithLookbackWindow(t *testing.T) {
 	watermark := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}, Watermark: watermark}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1", Watermark: watermark},
+	}}
 	rec := &fakeRecorder{}
 	src := &fakeSource{}
 	enricher := &fakeEnricher{}
 
-	if _, err := Sync(creds, rec, []TranscriptSource{src}, enricher, Options{}); err != nil {
+	if _, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, enricher, Options{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -318,11 +336,13 @@ func TestSyncQueriesSourcesWithLookbackWindow(t *testing.T) {
 // dedupWindow-before-the-zero-value, which is a different, non-zero
 // time.Time that would start filtering things out.
 func TestSyncNeverSyncedQueriesWithZeroSince(t *testing.T) {
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	src := &fakeSource{}
 
-	if _, err := Sync(creds, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{}); err != nil {
+	if _, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, &fakeEnricher{}, Options{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(src.sinceCalls) != 1 || !src.sinceCalls[0].IsZero() {
@@ -338,12 +358,14 @@ func TestSyncNeverSyncedQueriesWithZeroSince(t *testing.T) {
 // asked for. Only the stored-watermark path gets the lookback.
 func TestSyncExplicitSinceSkipsLookback(t *testing.T) {
 	explicitSince := time.Date(2026, 8, 6, 11, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	src := &fakeSource{}
 	enricher := &fakeEnricher{}
 
-	if _, err := Sync(creds, rec, []TranscriptSource{src}, enricher, Options{Since: &explicitSince}); err != nil {
+	if _, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, enricher, Options{Since: &explicitSince}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -365,12 +387,14 @@ func TestSyncExplicitSinceSkipsLookback(t *testing.T) {
 func TestSyncExplicitSinceExcludesTurnsOutsideTheNamedWindow(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	since1h := now.Add(-1 * time.Hour)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 	rec := &fakeRecorder{}
 	old := turnAt("old", "/home/dev/repo", now.Add(-20*time.Hour))
 	src := &fakeSource{turns: []Turn{old}}
 
-	result, err := Sync(creds, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{Since: &since1h})
+	result, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, &fakeEnricher{}, Options{Since: &since1h})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -389,18 +413,20 @@ func TestSyncExplicitSinceExcludesTurnsOutsideTheNamedWindow(t *testing.T) {
 // from the finding, and the reason RecentTurns/Seen exist at all.
 func TestSyncRePushesLateArrivingTurnBelowWatermark(t *testing.T) {
 	base := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{
-		SpaceID:  "spc_a1",
-		Projects: []string{"/home/dev/repo"},
-		// The watermark already advanced past "late" from an earlier,
-		// faster-arriving turn -- but "late" itself was never pushed.
-		Watermark: base,
-	}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{
+			Path:    "/home/dev/repo",
+			SpaceID: "spc_a1",
+			// The watermark already advanced past "late" from an earlier,
+			// faster-arriving turn -- but "late" itself was never pushed.
+			Watermark: base,
+		},
+	}}
 	rec := &fakeRecorder{}
 	late := turnAt("late", "/home/dev/repo", base.Add(-30*time.Minute))
 	src := &fakeSource{turns: []Turn{late}}
 
-	result, err := Sync(creds, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{})
+	result, err := SyncProject(&creds.Projects[0], rec, []TranscriptSource{src}, &fakeEnricher{}, Options{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -420,7 +446,9 @@ func TestSyncRePushesLateArrivingTurnBelowWatermark(t *testing.T) {
 // idempotency key and would record them twice.
 func TestSyncPartialBatchFailureMarksAcceptedPrefixSynced(t *testing.T) {
 	base := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	creds := &Credentials{SpaceID: "spc_a1", Projects: []string{"/home/dev/repo"}}
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/repo", SpaceID: "spc_a1"},
+	}}
 
 	const total = 150
 	const acceptedInRun1 = 100
@@ -433,7 +461,7 @@ func TestSyncPartialBatchFailureMarksAcceptedPrefixSynced(t *testing.T) {
 	run1Rec := &fakeRecorder{err: errors.New("400 body too large"), accepted: acceptedInRun1}
 	run1Src := &fakeSource{turns: turns}
 
-	result, err := Sync(creds, run1Rec, []TranscriptSource{run1Src}, &fakeEnricher{}, Options{})
+	result, err := SyncProject(&creds.Projects[0], run1Rec, []TranscriptSource{run1Src}, &fakeEnricher{}, Options{})
 	if err == nil {
 		t.Fatal("expected run 1's hard failure to surface")
 	}
@@ -444,11 +472,11 @@ func TestSyncPartialBatchFailureMarksAcceptedPrefixSynced(t *testing.T) {
 		t.Fatalf("run 1 recorded %d items, want %d", len(run1Rec.items), acceptedInRun1)
 	}
 	for i := 0; i < acceptedInRun1; i++ {
-		if !creds.Seen(fmt.Sprintf("t%03d", i)) {
+		if !creds.Projects[0].Seen(fmt.Sprintf("t%03d", i)) {
 			t.Errorf("t%03d was accepted in run 1 and should be marked seen", i)
 		}
 	}
-	if creds.Watermark.IsZero() {
+	if creds.Projects[0].Watermark.IsZero() {
 		t.Fatal("run 1's accepted prefix should have advanced the watermark")
 	}
 
@@ -459,7 +487,7 @@ func TestSyncPartialBatchFailureMarksAcceptedPrefixSynced(t *testing.T) {
 	run2Rec := &fakeRecorder{}
 	run2Src := &fakeSource{turns: turns}
 
-	if _, err := Sync(creds, run2Rec, []TranscriptSource{run2Src}, &fakeEnricher{}, Options{}); err != nil {
+	if _, err := SyncProject(&creds.Projects[0], run2Rec, []TranscriptSource{run2Src}, &fakeEnricher{}, Options{}); err != nil {
 		t.Fatalf("run 2: unexpected error: %v", err)
 	}
 
@@ -476,5 +504,73 @@ func TestSyncPartialBatchFailureMarksAcceptedPrefixSynced(t *testing.T) {
 		if idx < acceptedInRun1 {
 			t.Errorf("run 2 re-pushed %q, which run 1 already got accepted", id)
 		}
+	}
+}
+
+func TestSyncAllContinuesPastOneProjectFailure(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	creds := &Credentials{Version: configVersion, Projects: []Project{
+		{Path: "/home/dev/good", SpaceID: "good"},
+		{Path: "/home/dev/bad", SpaceID: "bad"},
+	}}
+
+	rec := &spaceAwareRecorder{failSpace: "bad"}
+	src := &fakeSource{turns: []Turn{
+		turnAt("g1", "/home/dev/good", now),
+		turnAt("b1", "/home/dev/bad", now),
+	}}
+
+	results, err := SyncAll(creds, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{})
+	if err != nil {
+		t.Fatalf("one project failing must not fail the whole run: %v", err)
+	}
+
+	if results["/home/dev/good"].Pushed != 1 {
+		t.Errorf("good pushed = %d, want 1", results["/home/dev/good"].Pushed)
+	}
+	if creds.Projects[0].Watermark.IsZero() {
+		t.Error("the succeeding project's watermark should have advanced")
+	}
+	if !creds.Projects[1].Watermark.IsZero() {
+		t.Error("the failing project's watermark must not advance")
+	}
+}
+
+// spaceAwareRecorder fails only for a named space, so one project can error
+// while another succeeds in the same SyncAll run.
+type spaceAwareRecorder struct {
+	failSpace string
+	bySpace   map[string][]RecordItem
+}
+
+func (r *spaceAwareRecorder) RecordBatch(spaceID string, items []RecordItem) (int, error) {
+	if spaceID == r.failSpace {
+		return 0, errors.New("boom")
+	}
+	if r.bySpace == nil {
+		r.bySpace = map[string][]RecordItem{}
+	}
+	r.bySpace[spaceID] = append(r.bySpace[spaceID], items...)
+	return len(items), nil
+}
+
+func TestSyncProjectOnlyTakesItsOwnTurns(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	p := &Project{Path: "/home/dev/repo", SpaceID: "spc_a1"}
+	rec := &fakeRecorder{}
+	src := &fakeSource{turns: []Turn{
+		turnAt("mine", "/home/dev/repo/cli", now),
+		turnAt("theirs", "/home/dev/other", now),
+	}}
+
+	result, err := SyncProject(p, rec, []TranscriptSource{src}, &fakeEnricher{}, Options{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Pushed != 1 || result.Filtered != 1 {
+		t.Errorf("pushed = %d, filtered = %d, want 1/1", result.Pushed, result.Filtered)
+	}
+	if rec.items[0].Metadata["turn_id"] != "mine" {
+		t.Errorf("pushed turn_id = %v, want mine", rec.items[0].Metadata["turn_id"])
 	}
 }

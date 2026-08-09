@@ -42,16 +42,20 @@ type Result struct {
 	// were available still went out, without ClickHouse's contribution.
 	EnrichErr     error
 	PromptOnlyErr error
+	// SyncErr is set by SyncAll when this project's own sync failed, so a
+	// caller iterating results can report which spaces are broken without
+	// the whole run being an error.
+	SyncErr error
 }
 
-// Sync gathers turns from every source, filters them by allowlist and
-// watermark, masks them, enriches them, and writes them. It mutates creds'
+// SyncProject gathers turns from every source, filters them by allowlist and
+// watermark, masks them, enriches them, and writes them. It mutates p's
 // watermark on success but does not persist -- the caller decides that, so
 // a dry run leaves the config file alone.
-func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher Enricher, opts Options) (Result, error) {
+func SyncProject(p *Project, rec Recorder, sources []TranscriptSource, enricher Enricher, opts Options) (Result, error) {
 	var result Result
 
-	since := creds.Watermark
+	since := p.Watermark
 	if opts.Since != nil {
 		since = *opts.Since
 	}
@@ -118,11 +122,11 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 
 	var selected []Turn
 	for _, turn := range candidates {
-		if !creds.AllowsPath(turn.CWD) {
+		if !p.AllowsPath(turn.CWD) {
 			result.Filtered++
 			continue
 		}
-		if creds.Seen(turn.TurnID) {
+		if p.Seen(turn.TurnID) {
 			result.Deduped++
 			continue
 		}
@@ -158,7 +162,7 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 		return result, nil
 	}
 
-	accepted, err := rec.RecordBatch(creds.SpaceID, items)
+	accepted, err := rec.RecordBatch(p.SpaceID, items)
 	if err != nil {
 		result.Pushed = accepted
 		// RecordBatch writes in chunks of up to 100 and returns how many
@@ -183,11 +187,38 @@ func Sync(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher
 			for _, turn := range selected[:accepted] {
 				acceptedSynced[turn.TurnID] = turn.Timestamp
 			}
-			creds.MarkSynced(acceptedSynced)
+			p.MarkSynced(acceptedSynced)
 		}
 		return result, err
 	}
 
-	creds.MarkSynced(synced)
+	p.MarkSynced(synced)
 	return result, nil
+}
+
+// SyncAll syncs every configured project independently. One project's
+// failure is recorded against that project and leaves its watermark
+// untouched; the others still run. The returned error is non-nil only when
+// every project failed, so a caller can distinguish "nothing worked" from
+// "one space is having a bad day".
+func SyncAll(creds *Credentials, rec Recorder, sources []TranscriptSource, enricher Enricher, opts Options) (map[string]Result, error) {
+	results := make(map[string]Result, len(creds.Projects))
+	failures := 0
+	var lastErr error
+
+	for i := range creds.Projects {
+		p := &creds.Projects[i]
+		result, err := SyncProject(p, rec, sources, enricher, opts)
+		if err != nil {
+			failures++
+			lastErr = err
+			result.SyncErr = err
+		}
+		results[p.Path] = result
+	}
+
+	if failures > 0 && failures == len(creds.Projects) {
+		return results, lastErr
+	}
+	return results, nil
 }
