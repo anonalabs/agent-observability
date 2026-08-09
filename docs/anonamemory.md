@@ -1,6 +1,6 @@
 # AnonaMemory
 
-Push your agents' prompts and responses to [AnonaMemory](https://docs.anonalabs.com/introduction), so the conversation history the stack already sees becomes a queryable memory layer.
+Push your agents' prompts and responses to [AnonaMemory](https://docs.anonalabs.com/introduction), so the conversation history the stack already sees becomes a queryable memory layer -- scoped per project, each project landing in its own AnonaMemory space.
 
 This is off by default and asks before doing anything.
 
@@ -16,14 +16,69 @@ Answer yes and it walks through:
 
 1. **API key.** Create one at <https://docs.anonalabs.com/quickstart> — dashboard, API keys, New key. Signing up does not create one for you. The key is not echoed as you type.
 2. **Space.** Existing spaces are listed; pick one or create a new one by name.
-3. **Project directories.** Only sessions whose working directory is inside one of these is ever pushed. This is deny-by-default: an empty list pushes nothing.
-4. **First sync**, then the cron line to keep it current.
+3. **Project directories.** Only sessions whose working directory is inside one of these is ever pushed. This is deny-by-default: an empty list pushes nothing. Every path from this one comma-separated prompt is added to the space you just picked in step 2 -- to put different projects in different spaces, run `agentobs connect` again for each, or edit `memory.json` by hand (see below).
+4. **First sync.**
+5. **Auto-sync.** "Sync automatically when a Claude Code session ends?" (default yes). Answering yes registers a Stop hook in `~/.claude/settings.json` that runs `agentobs memory hook` -- merged into any existing hooks, not replacing them, with a `.bak` written first. See [The Stop hook](#the-stop-hook) below.
 
 Config lands at `~/.config/agentobs/memory.json`, mode 0600 (its directory is created/kept at 0700). It holds your API key.
 
+**Re-running `agentobs connect` and answering yes to AnonaMemory again writes a fresh `memory.json`** -- it does not merge into an existing one. If you already have projects configured and want to add another, list all of them together at the project-directories prompt in a single run, or edit the JSON by hand rather than reconnecting.
+
+## Per-project config
+
+The config is one file, `~/.config/agentobs/memory.json`, holding a list of project entries. Each entry has its own space, watermark, and dedup set -- a shared watermark would let one project's sync skip another project's turns, since advancing it past a timestamp hides everything older from every source:
+
+```json
+{
+  "version": 2,
+  "api_key": "am_live_...",
+  "projects": [
+    {
+      "path": "/home/you/code/service-a",
+      "space_id": "space_abc123",
+      "watermark": "2026-08-01T12:00:00Z",
+      "recent_turns": { "...": "..." }
+    },
+    {
+      "path": "/home/you/code/service-b",
+      "space_id": "space_def456",
+      "watermark": "2026-08-02T09:15:00Z"
+    }
+  ]
+}
+```
+
+`recent_turns` is the local dedup set (turn id → timestamp, pruned after 24h) and is omitted here for brevity; a real file has one per project once it's synced anything.
+
+`agentobs memory projects` lists every configured project, its space, and its last-sync time:
+
+```
+PROJECT                                           SPACE                    LAST SYNC
+/home/you/code/service-a                          space_abc123             2026-08-01T12:00:00Z
+/home/you/code/service-b                          space_def456             never
+```
+
+`agentobs memory sync --project <path>` syncs only the entry whose path matches (looked up the same way a turn's working directory is: `<path>` must equal or sit inside a configured project's `path`).
+
+**Older configs migrate automatically.** A `memory.json` from before per-project support (one flat `space_id`/`watermark` shared by every listed project) is detected by its missing/lower `version` field, backed up to `memory.json.bak` before anything is rewritten, and turned into one entry per project path, each starting from the old shared space and watermark -- so history isn't re-pushed, but each project's watermark advances independently from then on.
+
+## The Stop hook
+
+Registering the Stop hook (step 5 above) adds `agentobs memory hook` to `~/.claude/settings.json`'s `Stop` hooks. Claude Code invokes it with a JSON payload (`session_id`, `transcript_path`, `cwd`) on stdin at the end of every session.
+
+The hook never delays session end and never talks to the terminal:
+
+- It re-execs itself detached (`--detached`, with the payload handed to the child via a temp file) and returns immediately, so Claude Code isn't blocked on a sync that's really network I/O against AnonaMemory.
+- The detached child does the actual sync -- for whichever configured project matches the session's `cwd` -- under a per-project lock file, so two sessions ending at once can't double-push.
+- Everything it has to say goes to `~/.config/agentobs/sync.log`, never stdout or stderr: a Stop hook's output is read by Claude Code, and an optional connector must stay invisible to it. The command always exits 0, whether the sync succeeded, found nothing to do, or failed outright.
+
+Only Claude Code sessions trigger this hook. Cursor, Copilot, Codex, and OpenCode have no equivalent session-end signal here, so their turns (where they're confirmed to arrive at all -- see below) still depend on cron or a manual `agentobs memory sync`.
+
 ## Keeping it current
 
-Nothing runs in the background. Add the printed cron entry:
+`sync` is incremental: each run queries every source from `watermark - 24h` (a trailing lookback, not the watermark itself -- see below) and relies on the local dedup set to reject anything already pushed, rather than a strict cutoff that could lose turns still in flight when the watermark last advanced. `--since` bypasses all of that: it's a manual backfill window you chose on purpose, used as-is with no lookback added, and it ignores the stored watermark entirely (a `0001-01-01T00:00:00Z`/zero watermark -- "never synced" -- is also left alone rather than having the lookback subtracted from it, which would otherwise produce a non-zero cutoff that starts filtering out real history).
+
+The Stop hook (above) keeps Claude Code current automatically. Nothing else runs in the background -- add the printed cron entry to cover the rest (Cursor/Copilot/Codex/OpenCode turns, and Claude Code sessions from before the hook was registered):
 
 ```
 0 * * * * agentobs memory sync --quiet
@@ -34,11 +89,13 @@ Nothing runs in the background. Add the printed cron entry:
 Or run it by hand whenever you want:
 
 ```bash
-agentobs memory sync              # push everything since the last sync
-agentobs memory sync --dry-run    # count what would go, change nothing
-agentobs memory sync --since 7d   # backfill, ignoring the watermark
-agentobs memory status            # space, last sync, pending count
-agentobs memory disconnect        # delete the local config (server-side data is untouched)
+agentobs memory sync                        # push everything since each project's watermark (with the 24h lookback above)
+agentobs memory sync --project /path/to/repo # sync only that one configured project
+agentobs memory sync --dry-run              # count what would go, change nothing
+agentobs memory sync --since 7d             # backfill 7 days, ignoring the watermark entirely
+agentobs memory projects                    # list configured projects, spaces, and last-sync times
+agentobs memory status                      # space, last sync, pending count per project
+agentobs memory disconnect                  # delete the local config (server-side data is untouched)
 ```
 
 ## What actually gets pushed
