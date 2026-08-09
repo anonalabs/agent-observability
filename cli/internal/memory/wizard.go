@@ -11,8 +11,6 @@ import (
 	"github.com/anonalabs/agent-observability/cli/internal/agents"
 )
 
-const signupURL = "https://docs.anonalabs.com/quickstart"
-
 // createNewSpaceOption is the sentinel entry in the space picker.
 const createNewSpaceOption = "Create a new space..."
 
@@ -55,7 +53,6 @@ func OfferConnect(cwd string, nonInteractive bool, enabled *bool) error {
 
 func runWizard(cwd string) error {
 	fmt.Println()
-	fmt.Printf("Create an API key at %s (signing up doesn't make one for you).\n", signupURL)
 
 	var apiKey string
 	if err := survey.AskOne(&survey.Password{Message: "AnonaMemory API key:"}, &apiKey, survey.WithValidator(survey.Required)); err != nil {
