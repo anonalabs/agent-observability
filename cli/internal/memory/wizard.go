@@ -78,11 +78,15 @@ func runWizard(cwd string) error {
 	}
 
 	creds := &Credentials{
-		APIKey:      apiKey,
-		SpaceID:     spaceID,
-		SpaceName:   spaceName,
-		Projects:    projects,
-		RecentTurns: map[string]time.Time{},
+		Version: configVersion,
+		APIKey:  apiKey,
+	}
+	for _, path := range projects {
+		creds.Projects = append(creds.Projects, Project{
+			Path:        path,
+			SpaceID:     spaceID,
+			RecentTurns: map[string]time.Time{},
+		})
 	}
 	if err := SaveCredentials(creds); err != nil {
 		return err
@@ -95,7 +99,7 @@ func runWizard(cwd string) error {
 	if err != nil {
 		return err
 	}
-	result, syncErr := Sync(creds, client, []TranscriptSource{source}, NewClickHouse(), Options{})
+	results, syncErr := SyncAll(creds, client, []TranscriptSource{source}, NewClickHouse(), Options{})
 	if err := SaveCredentials(creds); err != nil {
 		return err
 	}
@@ -103,14 +107,26 @@ func runWizard(cwd string) error {
 		return fmt.Errorf("first sync: %w", syncErr)
 	}
 
-	fmt.Printf("Pushed %d turns to %s.\n", result.Pushed, spaceName)
+	pushed := 0
+	var enrichErr, promptOnlyErr error
+	for _, result := range results {
+		pushed += result.Pushed
+		if result.EnrichErr != nil {
+			enrichErr = result.EnrichErr
+		}
+		if result.PromptOnlyErr != nil {
+			promptOnlyErr = result.PromptOnlyErr
+		}
+	}
+
+	fmt.Printf("Pushed %d turns to %s.\n", pushed, spaceName)
 	// Mirrors the gating and wording `agentobs memory sync` uses for these
 	// two failure modes, so the user doesn't see contradictory phrasing
 	// depending on which command happened to run the sync.
-	if result.EnrichErr != nil && result.Pushed > 0 {
+	if enrichErr != nil && pushed > 0 {
 		fmt.Println("ClickHouse was unreachable for cost/token enrichment -- turns went out without that context.")
 	}
-	if result.PromptOnlyErr != nil {
+	if promptOnlyErr != nil {
 		fmt.Println("ClickHouse was unreachable, so only Claude Code transcripts were read this run.")
 	}
 	fmt.Println()
