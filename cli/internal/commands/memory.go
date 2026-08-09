@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -227,12 +226,21 @@ func memoryDisconnectCmd() *cobra.Command {
 // an optional connector must never be able to break the agent.
 func memoryHookCmd() *cobra.Command {
 	var detached bool
+	var payloadFile string
 
 	cmd := &cobra.Command{
 		Use:    "hook",
 		Short:  "Internal: invoked by Claude Code's Stop hook to sync the finished session",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The parent wrote the payload to payloadFile and handed us its
+			// contents on stdin. We're the only side that can safely delete
+			// it: the parent exits right after starting us, before it could
+			// know we've actually finished reading.
+			if detached && payloadFile != "" {
+				defer os.Remove(payloadFile)
+			}
+
 			payload, err := memory.ParseHookPayload(cmd.InOrStdin())
 			if err != nil {
 				memory.LogHook("bad payload: %v", err)
@@ -292,11 +300,22 @@ func memoryHookCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&detached, "detached", false, "internal: the re-exec'd child that performs the sync")
+	cmd.Flags().StringVar(&payloadFile, "payload-file", "", "internal: temp file holding the hook payload, removed by the child once read")
 	return cmd
 }
 
 // respawnDetached re-runs this command with --detached, handing the payload
-// on the child's stdin, then returns without waiting.
+// to the child on its stdin via a temp file, then returns without waiting.
+//
+// The payload can't go through an in-memory io.Reader here: when Cmd.Stdin
+// is anything other than an *os.File, os/exec feeds it to the child through
+// an unawaited background goroutine that copies into a pipe. Since this
+// process calls Release and exits immediately after Start -- deliberately,
+// so Claude Code is never blocked -- that goroutine is racing process exit,
+// and losing the race closes the pipe before anything was written, handing
+// the child an empty payload. A real file sidesteps the race entirely: it's
+// written and closed before the child ever starts, and os/exec dups an
+// *os.File straight into the child with no copy goroutine involved.
 func respawnDetached(payload memory.HookPayload) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -308,12 +327,45 @@ func respawnDetached(payload memory.HookPayload) error {
 		return err
 	}
 
-	child := exec.Command(exe, "memory", "hook", "--detached")
-	child.Stdin = bytes.NewReader(encoded)
+	// os.TempDir, not the config dir: this file is transient and holds
+	// nothing as sensitive as the API key the config dir's 0700/0600
+	// permissions are protecting, so it shouldn't share that directory.
+	tmp, err := os.CreateTemp("", "agentobs-hook-*.json")
+	if err != nil {
+		return err
+	}
+	path := tmp.Name()
+	// The payload names a working directory path, not a secret, but 0600
+	// costs nothing -- os.CreateTemp already creates it with that mode.
+	if _, err := tmp.Write(encoded); err != nil {
+		tmp.Close()
+		os.Remove(path)
+		return err
+	}
+	// Flush before the child can possibly read it -- this is what makes
+	// the handoff race-free.
+	if err := tmp.Close(); err != nil {
+		os.Remove(path)
+		return err
+	}
+
+	stdin, err := os.Open(path)
+	if err != nil {
+		os.Remove(path)
+		return err
+	}
+	defer stdin.Close()
+
+	// --payload-file tells the detached child what to remove once it has
+	// read stdin; this process exits too soon after Start to remove it
+	// itself.
+	child := exec.Command(exe, "memory", "hook", "--detached", "--payload-file", path)
+	child.Stdin = stdin
 	child.Stdout = nil
 	child.Stderr = nil
 	child.SysProcAttr = detachedSysProcAttr()
 	if err := child.Start(); err != nil {
+		os.Remove(path)
 		return err
 	}
 	// Not waited on deliberately: the child outlives this process so Claude
