@@ -119,7 +119,7 @@ func ProjectLock(p *Project) (*flock.Flock, error) {
 		return nil, err
 	}
 
-	name := fmt.Sprintf("sync-%x.lock", sha256Hex(p.Path))
+	name := fmt.Sprintf("sync-%s.lock", sha256Hex(p.Path))
 	lock := flock.New(filepath.Join(dir, name))
 	ok, err := lock.TryLock()
 	if err != nil {
