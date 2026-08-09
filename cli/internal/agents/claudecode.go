@@ -77,7 +77,23 @@ func RegisterStopHook() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	return registerStopHookAt(path)
+}
+
+// registerStopHookAt does the actual read-merge-write against an explicit
+// path, so it can be exercised against a t.TempDir() instead of the real
+// ~/.claude/settings.json. The write is atomic: we marshal into a temp file
+// next to the target and os.Rename it over -- rename within a filesystem is
+// atomic, so a crash, OOM kill, or full disk between those steps leaves the
+// original file completely intact rather than truncated. The temp file has
+// to live in the same directory as the target because os.Rename fails
+// across filesystems, and a bare os.WriteFile(path, ...) would otherwise
+// truncate settings.json before writing its replacement -- a file another
+// tool (and Claude Code itself) depends on for model, permissions, MCP
+// servers, and other hooks.
+func registerStopHookAt(path string) (string, error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 
@@ -95,7 +111,28 @@ func RegisterStopHook() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
+
+	tmp, err := os.CreateTemp(dir, ".settings.json.tmp-*")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return "", err
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		os.Remove(tmpPath)
+		return "", err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
 		return "", err
 	}
 	return path, nil

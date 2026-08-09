@@ -1,7 +1,10 @@
 package agents
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -73,4 +76,93 @@ func TestMergeStopHookKeepsForeignStopEntries(t *testing.T) {
 	if !found {
 		t.Error("another tool's Stop hook must not be replaced")
 	}
+}
+
+// noStrayTempFiles fails the test if any of our temp files (the
+// ".settings.json.tmp-*" pattern used by registerStopHookAt) are left
+// behind in dir. A leftover temp file would mean a cleanup path was missed.
+func noStrayTempFiles(t *testing.T, dir string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, ".settings.json.tmp-*"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("temp files left behind: %v", matches)
+	}
+}
+
+func TestRegisterStopHookAtBacksUpBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	original := []byte(`{"model":"opus"}`)
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if _, err := registerStopHookAt(path); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	backup, err := os.ReadFile(path + ".bak")
+	if err != nil {
+		t.Fatalf("reading backup: %v", err)
+	}
+	if !bytes.Equal(backup, original) {
+		t.Errorf("backup = %s, want the original bytes %s", backup, original)
+	}
+	noStrayTempFiles(t, dir)
+}
+
+func TestRegisterStopHookAtAbortsOnMalformedJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	original := []byte(`{not valid json`)
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if _, err := registerStopHookAt(path); err == nil {
+		t.Fatal("expected an error for malformed JSON, got nil")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading settings after abort: %v", err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Errorf("settings.json changed after an abort: got %s, want unchanged %s", after, original)
+	}
+	noStrayTempFiles(t, dir)
+}
+
+func TestRegisterStopHookAtAbortsOnEmptyExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte{}, 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if _, err := registerStopHookAt(path); err == nil {
+		t.Fatal("expected an error for an empty existing file, got nil")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading settings after abort: %v", err)
+	}
+	if len(after) != 0 {
+		t.Errorf("settings.json changed after an abort: got %q, want empty", after)
+	}
+	noStrayTempFiles(t, dir)
+}
+
+func TestRegisterStopHookAtLeavesNoTempFileOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+
+	if _, err := registerStopHookAt(path); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	noStrayTempFiles(t, dir)
 }
